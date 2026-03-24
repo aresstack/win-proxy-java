@@ -1,0 +1,19 @@
+# Build output
+build/
+target/
+out/
+
+# Gradle
+.gradle/
+gradle/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
