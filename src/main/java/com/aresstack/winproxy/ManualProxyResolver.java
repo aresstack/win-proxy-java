@@ -8,8 +8,8 @@ public final class ManualProxyResolver {
     public ProxyResult resolve(ProxyConfiguration configuration) {
         String host = configuration.getManualProxyHost();
         int port = configuration.getManualProxyPort();
-        if (host == null || host.trim().length() == 0 || port <= 0) {
-            return ProxyResult.direct();
+        if (host == null || host.trim().length() == 0 || port < 1 || port > 65535) {
+            return ProxyResult.direct("invalid-manual-proxy");
         }
         return ProxyResult.of(host.trim(), port);
     }

@@ -116,7 +116,11 @@ public final class WindowsProxyResolver {
      * @return proxy result or direct
      */
     public ProxyResult resolveWindowsPac(String targetUrl) {
-        return windowsPacScriptProxyResolver.resolve(configuration, targetUrl);
+        try {
+            return windowsPacScriptProxyResolver.resolve(configuration, targetUrl);
+        } catch (ProxyResolutionException e) {
+            return resolveRegistry(targetUrl == null || targetUrl.trim().length() == 0 ? configuration.getTestUrl() : targetUrl);
+        }
     }
 
     /**

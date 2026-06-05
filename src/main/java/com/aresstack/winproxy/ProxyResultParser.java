@@ -42,13 +42,24 @@ public final class ProxyResultParser {
     }
 
     private ProxyResult parseHostPort(String value) {
+        if (value == null) {
+            return ProxyResult.direct("invalid-proxy-address");
+        }
         String[] parts = value.split(":", 2);
         if (parts.length != 2) {
             return ProxyResult.direct("invalid-proxy-address");
         }
+        String host = parts[0] == null ? "" : parts[0].trim();
+        String portText = parts[1] == null ? "" : parts[1].trim();
+        if (host.length() == 0 || portText.length() == 0) {
+            return ProxyResult.direct("invalid-proxy-address");
+        }
         try {
-            int port = Integer.parseInt(parts[1]);
-            return ProxyResult.of(parts[0], port);
+            int port = Integer.parseInt(portText);
+            if (port < 1 || port > 65535) {
+                return ProxyResult.direct("invalid-proxy-port");
+            }
+            return ProxyResult.of(host, port);
         } catch (NumberFormatException e) {
             return ProxyResult.direct("invalid-proxy-port");
         }

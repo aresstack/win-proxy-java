@@ -80,7 +80,7 @@ final class ScriptRunner {
 
     private String readOutput(Future<String> outputFuture) {
         try {
-            return outputFuture.get(1, TimeUnit.SECONDS);
+            return outputFuture.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new ProxyResolutionException("PowerShell output reading was interrupted.", e);

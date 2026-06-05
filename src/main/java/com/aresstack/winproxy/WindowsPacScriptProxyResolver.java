@@ -8,6 +8,10 @@ public final class WindowsPacScriptProxyResolver {
     private final ProxyResultParser parser = new ProxyResultParser();
 
     public ProxyResult resolve(ProxyConfiguration configuration, String targetUrl) {
+        String resolvedTargetUrl = targetUrl;
+        if (resolvedTargetUrl == null || resolvedTargetUrl.trim().length() == 0) {
+            resolvedTargetUrl = configuration.getTestUrl();
+        }
         String script = configuration.getWindowsPacScript();
         if (script == null || script.trim().length() == 0) {
             script = ProxyDefaults.DEFAULT_WINDOWS_PAC_SCRIPT;
@@ -15,7 +19,7 @@ public final class WindowsPacScriptProxyResolver {
 
         ScriptExecutionResult result = new ScriptRunner(script).runWithArguments(
                 "-TestUrl",
-                targetUrl,
+                resolvedTargetUrl,
                 configuration.isDebugEnabled() ? "-DebugEnabled" : ""
         );
         if (result.getExitCode() != 0) {
