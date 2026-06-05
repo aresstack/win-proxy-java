@@ -1,74 +1,85 @@
-<#
-.SYNOPSIS
-    Releases a new version to Maven Central via GitHub Actions.
-.PARAMETER Version
-    The version to release, e.g. "0.1.0-beta.1", "0.2.0", "1.0.0"
-.EXAMPLE
-    .\release.ps1 0.1.0-beta.1
-#>
 param(
-    [Parameter(Mandatory=$true, Position=0)]
-    [ValidatePattern('^\d+\.\d+\.\d+')]
-    [string]$Version
+    [switch]$SkipTests,
+    [string]$Version = ""
 )
 
-$ErrorActionPreference = 'Stop'
-$tag = "v$Version"
+$ErrorActionPreference = "Stop"
 
-if (-not (Test-Path 'pom.xml')) {
-    Write-Error "pom.xml not found. Run this script from the repository root."
+function Write-Step([string]$Message) {
+    Write-Host ""
+    Write-Host "==> $Message" -ForegroundColor Cyan
 }
 
-$existingTag = git tag -l $tag
+function Invoke-RequiredCommand([string]$Command, [string[]]$Arguments) {
+    Write-Host "> $Command $($Arguments -join ' ')" -ForegroundColor DarkGray
+    & $Command @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed with exit code $LASTEXITCODE: $Command $($Arguments -join ' ')"
+    }
+}
+
+function Get-ProjectVersion() {
+    $pomPath = Join-Path $PSScriptRoot "pom.xml"
+    [xml]$pom = Get-Content $pomPath
+    $namespaceManager = New-Object System.Xml.XmlNamespaceManager($pom.NameTable)
+    $namespaceManager.AddNamespace("m", "http://maven.apache.org/POM/4.0.0")
+    $versionNode = $pom.SelectSingleNode("/m:project/m:version", $namespaceManager)
+    if ($null -ne $versionNode -and -not [string]::IsNullOrWhiteSpace($versionNode.InnerText)) {
+        return $versionNode.InnerText.Trim()
+    }
+    return $null
+}
+
+function Assert-CleanWorkingTree() {
+    $status = git status --porcelain
+    if ($status) {
+        Write-Host $status
+        throw "Working tree is not clean. Commit all changes before releasing."
+    }
+}
+
+function Assert-CommandExists([string]$Command) {
+    $resolved = Get-Command $Command -ErrorAction SilentlyContinue
+    if (-not $resolved) {
+        throw "Required command not found on PATH: $Command"
+    }
+}
+
+Set-Location $PSScriptRoot
+
+Assert-CommandExists "git"
+Assert-CommandExists "mvn"
+
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $Version = Get-ProjectVersion
+}
+
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    throw "Could not determine project version."
+}
+
+$tagName = "v$Version"
+
+Write-Step "Preparing release $tagName"
+Assert-CleanWorkingTree
+
+$existingTag = git tag --list $tagName
 if ($existingTag) {
-    Write-Error "Tag $tag already exists. Choose a different version."
+    throw "Tag already exists: $tagName"
 }
 
-# --- Update version in pom.xml ---
-Write-Host "[1/5] Updating pom.xml ..." -ForegroundColor Cyan
-$pomBytes  = [System.IO.File]::ReadAllBytes("$PWD\pom.xml")
-$pomText   = [System.Text.Encoding]::UTF8.GetString($pomBytes)
-$pomNew    = $pomText -replace '(<version>)[^<]+(</version>([\s\S]*?)<packaging>)', "`${1}$Version`${2}"
-if ($pomNew -ne $pomText) {
-    [System.IO.File]::WriteAllBytes("$PWD\pom.xml", [System.Text.Encoding]::UTF8.GetBytes($pomNew))
-    Write-Host "       pom.xml -> $Version" -ForegroundColor Green
-} else {
-    Write-Host "       pom.xml already at $Version" -ForegroundColor Yellow
+Write-Step "Building Maven artifacts"
+$mavenArgs = @("clean", "verify")
+if ($SkipTests) {
+    $mavenArgs += "-DskipTests"
 }
+Invoke-RequiredCommand "mvn" $mavenArgs
 
-# --- Update version in README.md ---
-Write-Host "[2/5] Updating README.md ..." -ForegroundColor Cyan
-$readmeBytes = [System.IO.File]::ReadAllBytes("$PWD\README.md")
-$readmeText  = [System.Text.Encoding]::UTF8.GetString($readmeBytes)
-$readmeNew   = $readmeText -replace '(<version>)[^<]+(</version>)', "`${1}$Version`${2}"
-$readmeNew   = $readmeNew  -replace "(implementation\s+'com\.aresstack:win-proxy-java:)[^']+'", "`${1}$Version'"
-if ($readmeNew -ne $readmeText) {
-    [System.IO.File]::WriteAllBytes("$PWD\README.md", [System.Text.Encoding]::UTF8.GetBytes($readmeNew))
-    Write-Host "       README.md -> $Version" -ForegroundColor Green
-} else {
-    Write-Host "       README.md already at $Version" -ForegroundColor Yellow
-}
+Write-Step "Creating local tag $tagName"
+Invoke-RequiredCommand "git" @("tag", "-a", $tagName, "-m", "Release $tagName")
 
-# --- Commit ---
-Write-Host "[3/5] Committing ..." -ForegroundColor Cyan
-git add pom.xml README.md
-$diff = git diff --cached --name-only
-if ($diff) {
-    git commit -m "release $Version"
-} else {
-    Write-Host "       No changes — skipping commit." -ForegroundColor Yellow
-}
+Write-Step "Pushing tag"
+Invoke-RequiredCommand "git" @("push", "origin", $tagName)
 
-# --- Tag ---
-Write-Host "[4/5] Creating tag $tag ..." -ForegroundColor Cyan
-git tag $tag
-
-# --- Push ---
-Write-Host "[5/5] Pushing to origin ..." -ForegroundColor Cyan
-git push origin HEAD --tags
-
-Write-Host ""
-Write-Host "Done! Tag $tag pushed." -ForegroundColor Green
-Write-Host "GitHub Actions workflow will now build and publish to Maven Central."
-Write-Host "Monitor: https://github.com/aresstack/win-proxy-java/actions" -ForegroundColor Yellow
-
+Write-Step "Release tag pushed"
+Write-Host "Release $tagName is ready for Maven Central publishing." -ForegroundColor Green
