@@ -8,6 +8,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -30,6 +35,7 @@ final class ScriptRunner {
     ScriptExecutionResult runWithArguments(String... arguments) {
         File file = null;
         Process process = null;
+        ExecutorService outputExecutor = Executors.newSingleThreadExecutor();
         try {
             file = File.createTempFile("win-proxy-java-", ".ps1");
             Files.write(file.toPath(), script.getBytes(StandardCharsets.UTF_8));
@@ -39,12 +45,14 @@ final class ScriptRunner {
                     .redirectErrorStream(true)
                     .start();
 
+            Future<String> outputFuture = outputExecutor.submit(new OutputReader(process));
             int exitCode = waitFor(process);
-            String output = readOutput(process);
+            String output = readOutput(outputFuture);
             return new ScriptExecutionResult(exitCode, output.trim());
         } catch (IOException e) {
             throw new ProxyResolutionException("Could not run PowerShell script.", e);
         } finally {
+            outputExecutor.shutdownNow();
             if (process != null && process.isAlive()) {
                 process.destroyForcibly();
             }
@@ -70,20 +78,16 @@ final class ScriptRunner {
         return command;
     }
 
-    private String readOutput(Process process) throws IOException {
-        StringBuilder builder = new StringBuilder();
-        BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+    private String readOutput(Future<String> outputFuture) {
         try {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (builder.length() > 0) {
-                    builder.append(System.lineSeparator());
-                }
-                builder.append(line);
-            }
-            return builder.toString();
-        } finally {
-            reader.close();
+            return outputFuture.get(1, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ProxyResolutionException("PowerShell output reading was interrupted.", e);
+        } catch (ExecutionException e) {
+            throw new ProxyResolutionException("Could not read PowerShell output.", e);
+        } catch (java.util.concurrent.TimeoutException e) {
+            throw new ProxyResolutionException("PowerShell output reader did not finish.", e);
         }
     }
 
@@ -105,5 +109,30 @@ final class ScriptRunner {
             return "";
         }
         return value.replace("'", "''");
+    }
+
+    private static final class OutputReader implements Callable<String> {
+        private final Process process;
+
+        private OutputReader(Process process) {
+            this.process = process;
+        }
+
+        public String call() throws Exception {
+            StringBuilder builder = new StringBuilder();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+            try {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (builder.length() > 0) {
+                        builder.append(System.lineSeparator());
+                    }
+                    builder.append(line);
+                }
+                return builder.toString();
+            } finally {
+                reader.close();
+            }
+        }
     }
 }

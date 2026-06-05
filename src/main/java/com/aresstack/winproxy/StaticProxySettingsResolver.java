@@ -25,6 +25,9 @@ public final class StaticProxySettingsResolver {
             }
 
             String bypass = RegistryReader.queryValue(key, "ProxyOverride");
+            if (bypass == null || bypass.trim().length() == 0) {
+                bypass = RegistryReader.queryValueFromAllHives("ProxyOverride");
+            }
             if (proxyBypassMatcher.isBypassed(targetUrl, bypass)) {
                 return ProxyResult.direct("registry-bypass");
             }

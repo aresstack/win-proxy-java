@@ -28,7 +28,7 @@ public final class WindowsProxyResolver {
     public WindowsProxyResolver(ProxyConfiguration configuration) {
         this(
                 configuration,
-                new WindowsPacUrlResolver(),
+                createPacUrlResolver(configuration),
                 new UrlConnectionPacScriptLoader(),
                 PacEvaluator.createDefault(),
                 new StaticProxySettingsResolver(),
@@ -89,8 +89,12 @@ public final class WindowsProxyResolver {
         if (!pacUrlResolution.isPresent()) {
             return resolveRegistry(targetUrl);
         }
-        String pacScript = pacScriptLoader.load(pacUrlResolution.getPacUrl());
-        return pacEvaluator.evaluate(pacScript, targetUrl);
+        try {
+            String pacScript = pacScriptLoader.load(pacUrlResolution.getPacUrl());
+            return pacEvaluator.evaluate(pacScript, targetUrl);
+        } catch (ProxyResolutionException e) {
+            return resolveRegistry(targetUrl);
+        }
     }
 
     /**
@@ -187,7 +191,20 @@ public final class WindowsProxyResolver {
         if (pacUrl == null || pacUrl.trim().length() == 0) {
             return resolveRegistry(targetUrl);
         }
-        String script = pacScriptLoader.load(pacUrl);
-        return pacEvaluator.evaluate(script, targetUrl);
+        try {
+            String script = pacScriptLoader.load(pacUrl);
+            return pacEvaluator.evaluate(script, targetUrl);
+        } catch (ProxyResolutionException e) {
+            return resolveRegistry(targetUrl);
+        }
+    }
+
+    private static PacUrlResolver createPacUrlResolver(ProxyConfiguration configuration) {
+        if (configuration != null
+                && configuration.getPacUrlDiscoveryScript() != null
+                && configuration.getPacUrlDiscoveryScript().trim().length() > 0) {
+            return new PowerShellPacUrlResolver(configuration.getPacUrlDiscoveryScript());
+        }
+        return new WindowsPacUrlResolver();
     }
 }

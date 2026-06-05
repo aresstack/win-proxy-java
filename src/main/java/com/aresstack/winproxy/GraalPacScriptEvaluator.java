@@ -52,14 +52,16 @@ public final class GraalPacScriptEvaluator implements PacEvaluator {
     }
 
     private String createPacHelperScript() {
-        return "function dnsDomainIs(host, domain) { return host.length >= domain.length && host.substring(host.length - domain.length) === domain; }\n" +
-                "function shExpMatch(str, pattern) { var escaped = pattern.replace(/[.+^${}()|[\\]\\\\]/g, '\\\\$&'); var re = '^' + escaped.replace(/\\*/g, '.*').replace(/\\?/g, '.') + '$'; return new RegExp(re).test(str); }\n" +
-                "function isPlainHostName(host) { return host.indexOf('.') < 0; }\n" +
-                "function localHostOrDomainIs(host, hostdom) { return host === hostdom || (hostdom.indexOf(host + '.') === 0); }\n" +
-                "function dnsDomainLevels(host) { return host.split('.').length - 1; }\n" +
-                "function dnsResolve(host) { return pacHostResolver.dnsResolve(host); }\n" +
+        return "function pacString(value) { return value === null || value === undefined ? '' : String(value); }\n" +
+                "function pacLower(value) { return pacString(value).toLowerCase(); }\n" +
+                "function dnsDomainIs(host, domain) { var h = pacLower(host); var d = pacLower(domain); return h.length >= d.length && h.substring(h.length - d.length) === d; }\n" +
+                "function shExpMatch(str, pattern) { var escaped = pacString(pattern).replace(/[.+^${}()|[\\]\\\\]/g, '\\\\$&'); var re = '^' + escaped.replace(/\\*/g, '.*').replace(/\\?/g, '.') + '$'; return new RegExp(re, 'i').test(pacString(str)); }\n" +
+                "function isPlainHostName(host) { return pacString(host).indexOf('.') < 0; }\n" +
+                "function localHostOrDomainIs(host, hostdom) { var h = pacLower(host); var hd = pacLower(hostdom); return h === hd || (hd.indexOf(h + '.') === 0); }\n" +
+                "function dnsDomainLevels(host) { return pacString(host).split('.').length - 1; }\n" +
+                "function dnsResolve(host) { return pacHostResolver.dnsResolve(pacString(host)); }\n" +
                 "function isResolvable(host) { return dnsResolve(host) !== null; }\n" +
-                "function isInNet(host, pattern, mask) { var resolved = dnsResolve(host); if (resolved === null) { return false; } return pacHostResolver.isInNet(resolved, pattern, mask); }\n" +
+                "function isInNet(host, pattern, mask) { var resolved = dnsResolve(host); if (resolved === null) { return false; } return pacHostResolver.isInNet(resolved, pacString(pattern), pacString(mask)); }\n" +
                 "function myIpAddress() { return pacHostResolver.myIpAddress(); }\n" +
                 "function weekdayRange() { return pacHostResolver.weekdayRange.apply(pacHostResolver, arguments); }\n" +
                 "function dateRange() { return pacHostResolver.dateRange.apply(pacHostResolver, arguments); }\n" +

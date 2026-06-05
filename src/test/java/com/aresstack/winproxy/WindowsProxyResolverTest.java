@@ -42,6 +42,13 @@ class WindowsProxyResolverTest {
     }
 
     @Test
+    void ignoresUnsupportedSocksResult() {
+        ProxyResult result = new ProxyResultParser().parse("SOCKS proxy.example.com:1080");
+
+        assertTrue(result.isDirect());
+    }
+
+    @Test
     void parsesHostPortResult() {
         ProxyResult result = new ProxyResultParser().parse("proxy.example.com:8080");
 
@@ -114,6 +121,16 @@ class WindowsProxyResolverTest {
 
         assertEquals("proxy.example.com", result.getHost());
         assertEquals(8080, result.getPort());
+    }
+
+    @Test
+    void evaluatesCaseInsensitivePacHelpers() {
+        ProxyResult result = PacEvaluator.createDefault().evaluate(
+                "function FindProxyForURL(url, host) { if (dnsDomainIs(host, '.LOCAL')) { return 'DIRECT'; } return 'PROXY proxy.example.com:8080'; }",
+                "https://SERVICE.local/path"
+        );
+
+        assertTrue(result.isDirect());
     }
 
     @Test

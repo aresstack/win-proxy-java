@@ -27,11 +27,11 @@ public final class PacUrlProxyResolver {
         if (!pacUrlResolution.isPresent()) {
             return fallbackResolver.resolve(targetUrl);
         }
-        String pacScript = pacScriptLoader.load(pacUrlResolution.getPacUrl());
-        ProxyResult result = pacEvaluator.evaluate(pacScript, targetUrl);
-        if (result.isDirect()) {
+        try {
+            String pacScript = pacScriptLoader.load(pacUrlResolution.getPacUrl());
+            return pacEvaluator.evaluate(pacScript, targetUrl);
+        } catch (ProxyResolutionException e) {
             return fallbackResolver.resolve(targetUrl);
         }
-        return result;
     }
 }

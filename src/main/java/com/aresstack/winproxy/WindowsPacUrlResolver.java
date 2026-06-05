@@ -19,7 +19,7 @@ public final class WindowsPacUrlResolver implements PacUrlResolver {
         }
 
         int flags = RegistryReader.queryConnectionFlags();
-        if ((flags & RegistryReader.FLAG_AUTO_DETECT) != 0) {
+        if (flags >= 0 && (flags & RegistryReader.FLAG_AUTO_DETECT) != 0) {
             return PacUrlResolution.found(WPAD_URL, "registry:DefaultConnectionSettings:auto-detect");
         }
 

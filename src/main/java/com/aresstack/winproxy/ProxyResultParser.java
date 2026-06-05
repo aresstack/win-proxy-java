@@ -7,7 +7,7 @@ public final class ProxyResultParser {
 
     public ProxyResult parse(String pacResult) {
         if (pacResult == null || pacResult.trim().length() == 0) {
-            return ProxyResult.direct();
+            return ProxyResult.direct("empty-pac-result");
         }
 
         String[] entries = pacResult.split(";");
@@ -17,16 +17,16 @@ public final class ProxyResultParser {
                 return result;
             }
         }
-        return ProxyResult.direct();
+        return ProxyResult.direct("pac-direct");
     }
 
     private ProxyResult parseEntry(String entry) {
         if (entry == null) {
-            return ProxyResult.direct();
+            return ProxyResult.direct("null-pac-entry");
         }
         String trimmed = entry.trim();
         if (trimmed.length() == 0 || "DIRECT".equalsIgnoreCase(trimmed)) {
-            return ProxyResult.direct();
+            return ProxyResult.direct("pac-direct");
         }
         String upper = trimmed.toUpperCase();
         if (upper.startsWith("PROXY ")) {
@@ -35,25 +35,22 @@ public final class ProxyResultParser {
         if (upper.startsWith("HTTPS ")) {
             return parseHostPort(trimmed.substring(6).trim());
         }
-        if (upper.startsWith("SOCKS ")) {
-            return parseHostPort(trimmed.substring(6).trim());
-        }
-        if (trimmed.indexOf(':') > 0) {
+        if (trimmed.indexOf(':') > 0 && upper.indexOf(' ') < 0) {
             return parseHostPort(trimmed);
         }
-        return ProxyResult.direct();
+        return ProxyResult.direct("unsupported-pac-entry");
     }
 
     private ProxyResult parseHostPort(String value) {
         String[] parts = value.split(":", 2);
         if (parts.length != 2) {
-            return ProxyResult.direct();
+            return ProxyResult.direct("invalid-proxy-address");
         }
         try {
             int port = Integer.parseInt(parts[1]);
             return ProxyResult.of(parts[0], port);
         } catch (NumberFormatException e) {
-            return ProxyResult.direct();
+            return ProxyResult.direct("invalid-proxy-port");
         }
     }
 }
