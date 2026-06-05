@@ -19,12 +19,16 @@ public final class WindowsPacScriptProxyResolver {
 
         ScriptExecutionResult result = new ScriptRunner(script).runWithArguments(
                 "-TestUrl",
-                resolvedTargetUrl,
+                quotePowerShellArgument(resolvedTargetUrl),
                 configuration.isDebugEnabled() ? "-DebugEnabled" : ""
         );
         if (result.getExitCode() != 0) {
             throw new ProxyResolutionException("Windows PAC script failed with exit code " + result.getExitCode() + ".");
         }
         return parser.parse(result.getOutput());
+    }
+
+    private String quotePowerShellArgument(String value) {
+        return "'" + ScriptRunner.escapePowerShellSingleQuoted(value) + "'";
     }
 }

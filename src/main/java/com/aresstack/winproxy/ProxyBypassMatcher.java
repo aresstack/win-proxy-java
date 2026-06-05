@@ -16,10 +16,10 @@ public final class ProxyBypassMatcher {
         if (host == null || host.trim().length() == 0) {
             return false;
         }
-        String normalizedHost = host.toLowerCase(Locale.ENGLISH);
+        String normalizedHost = host.toLowerCase(Locale.ROOT);
         String[] entries = bypassList.split(";");
         for (int i = 0; i < entries.length; i++) {
-            if (matches(normalizedHost, entries[i].trim().toLowerCase(Locale.ENGLISH))) {
+            if (matches(normalizedHost, entries[i].trim().toLowerCase(Locale.ROOT))) {
                 return true;
             }
         }

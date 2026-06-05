@@ -58,6 +58,13 @@ class WindowsProxyResolverTest {
     }
 
     @Test
+    void rejectsInvalidProxyPorts() {
+        assertTrue(new ProxyResultParser().parse("proxy.example.com:0").isDirect());
+        assertTrue(new ProxyResultParser().parse("proxy.example.com:65536").isDirect());
+        assertTrue(new ProxyResultParser().parse("proxy.example.com:not-a-port").isDirect());
+    }
+
+    @Test
     void fallsBackToHttpProxyForProtocolMap() {
         ProxyResult result = new ProxyServerParser().parse("http=proxy.example.com:8080", "https://example.com");
 
@@ -101,6 +108,19 @@ class WindowsProxyResolverTest {
     }
 
     @Test
+    void rejectsInvalidManualProxyPort() {
+        ProxyConfiguration configuration = ProxyConfiguration.builder()
+                .mode(ProxyMode.MANUAL)
+                .manualProxyHost("proxy.example.com")
+                .manualProxyPort(70000)
+                .build();
+
+        ProxyResult result = new WindowsProxyResolver(configuration).resolve("https://plugins.gradle.org/m2/");
+
+        assertTrue(result.isDirect());
+    }
+
+    @Test
     void discoversConfiguredPacUrl() {
         ProxyConfiguration configuration = ProxyConfiguration.builder()
                 .pacUrl("http://proxy.example.com/wpad.dat")
@@ -110,6 +130,13 @@ class WindowsProxyResolverTest {
 
         assertTrue(resolution.isPresent());
         assertEquals("http://proxy.example.com/wpad.dat", resolution.getPacUrl());
+    }
+
+    @Test
+    void returnsNullWhenPowerShellPacUrlDiscoveryFails() {
+        String pacUrl = new WindowsProxyResolver().discoverPacUrlWithPowerShell("exit 1");
+
+        assertEquals(null, pacUrl);
     }
 
     @Test

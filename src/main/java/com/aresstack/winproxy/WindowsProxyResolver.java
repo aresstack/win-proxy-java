@@ -85,7 +85,12 @@ public final class WindowsProxyResolver {
      * @return proxy result or direct
      */
     public ProxyResult resolvePacUrl(String targetUrl) {
-        PacUrlResolution pacUrlResolution = discoverPacUrl();
+        PacUrlResolution pacUrlResolution;
+        try {
+            pacUrlResolution = discoverPacUrl();
+        } catch (ProxyResolutionException e) {
+            return resolveRegistry(targetUrl);
+        }
         if (!pacUrlResolution.isPresent()) {
             return resolveRegistry(targetUrl);
         }
@@ -152,9 +157,13 @@ public final class WindowsProxyResolver {
      * @return PAC URL or {@code null}
      */
     public String discoverPacUrlWithPowerShell(String script) {
-        PacUrlResolver resolver = new PowerShellPacUrlResolver(script);
-        PacUrlResolution resolution = resolver.resolve();
-        return resolution.isPresent() ? resolution.getPacUrl() : null;
+        try {
+            PacUrlResolver resolver = new PowerShellPacUrlResolver(script);
+            PacUrlResolution resolution = resolver.resolve();
+            return resolution.isPresent() ? resolution.getPacUrl() : null;
+        } catch (ProxyResolutionException e) {
+            return null;
+        }
     }
 
     /**
