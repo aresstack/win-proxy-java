@@ -39,8 +39,8 @@ final class ScriptRunner {
                     .redirectErrorStream(true)
                     .start();
 
-            String output = readOutput(process);
             int exitCode = waitFor(process);
+            String output = readOutput(process);
             return new ScriptExecutionResult(exitCode, output.trim());
         } catch (IOException e) {
             throw new ProxyResolutionException("Could not run PowerShell script.", e);

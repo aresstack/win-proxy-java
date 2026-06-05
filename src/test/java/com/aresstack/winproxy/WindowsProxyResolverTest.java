@@ -42,6 +42,44 @@ class WindowsProxyResolverTest {
     }
 
     @Test
+    void parsesHostPortResult() {
+        ProxyResult result = new ProxyResultParser().parse("proxy.example.com:8080");
+
+        assertFalse(result.isDirect());
+        assertEquals("proxy.example.com", result.getHost());
+        assertEquals(8080, result.getPort());
+    }
+
+    @Test
+    void fallsBackToHttpProxyForProtocolMap() {
+        ProxyResult result = new ProxyServerParser().parse("http=proxy.example.com:8080", "https://example.com");
+
+        assertFalse(result.isDirect());
+        assertEquals("proxy.example.com", result.getHost());
+        assertEquals(8080, result.getPort());
+    }
+
+    @Test
+    void selectsSchemeSpecificProxyForProtocolMap() {
+        ProxyResult result = new ProxyServerParser().parse("http=http.example.com:8080;https=https.example.com:8443", "https://example.com");
+
+        assertFalse(result.isDirect());
+        assertEquals("https.example.com", result.getHost());
+        assertEquals(8443, result.getPort());
+    }
+
+    @Test
+    void matchesBypassCaseInsensitive() {
+        assertTrue(new ProxyBypassMatcher().isBypassed("https://SERVICE.LOCAL/path", "*.local"));
+        assertTrue(new ProxyBypassMatcher().isBypassed("https://service.local/path", "*.LOCAL"));
+    }
+
+    @Test
+    void treatsInvalidBypassUrlAsNotBypassed() {
+        assertFalse(new ProxyBypassMatcher().isBypassed("not a url", "*.local"));
+    }
+
+    @Test
     void resolvesManualProxy() {
         ProxyConfiguration configuration = ProxyConfiguration.builder()
                 .mode(ProxyMode.MANUAL)
@@ -76,6 +114,16 @@ class WindowsProxyResolverTest {
 
         assertEquals("proxy.example.com", result.getHost());
         assertEquals(8080, result.getPort());
+    }
+
+    @Test
+    void respectsDirectPacResult() {
+        ProxyResult result = PacEvaluator.createDefault().evaluate(
+                "function FindProxyForURL(url, host) { return 'DIRECT'; }",
+                "https://plugins.gradle.org/m2/"
+        );
+
+        assertTrue(result.isDirect());
     }
 
     @Test
