@@ -1,56 +1,96 @@
 package com.aresstack.winproxy;
 
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.TimeUnit;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * Executes PowerShell commands and returns the trimmed stdout output.
+ * Executes PowerShell scripts with a temporary script file.
  */
 final class ScriptRunner {
 
-    private static final Logger LOG = Logger.getLogger(ScriptRunner.class.getName());
-    private static final int TIMEOUT_SECONDS = 10;
+    private final String script;
 
-    private ScriptRunner() {}
+    ScriptRunner(String script) {
+        this.script = script;
+    }
 
-    static String executePowerShell(String command) {
-        if (command == null || command.trim().isEmpty()) return null;
+    String run() {
+        return runWithArguments(new String[0]).getOutput();
+    }
+
+    ScriptExecutionResult runWithArguments(String... arguments) {
+        File file = null;
         try {
-            ProcessBuilder pb = new ProcessBuilder(
-                    "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                    "-Command", command);
-            pb.redirectErrorStream(false);
-            Process process = pb.start();
+            file = File.createTempFile("win-proxy-java-", ".ps1");
+            Files.write(file.toPath(), script.getBytes(StandardCharsets.UTF_8));
 
-            Thread stderrDrainer = new Thread(() -> {
-                try (BufferedReader r = new BufferedReader(
-                        new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
-                    while (r.readLine() != null) { /* discard */ }
-                } catch (Exception ignored) { }
-            }, "pac-url-stderr-drain");
-            stderrDrainer.setDaemon(true);
-            stderrDrainer.start();
+            List<String> command = createCommand(file, arguments);
+            Process process = new ProcessBuilder(command)
+                    .redirectErrorStream(true)
+                    .start();
 
-            StringBuilder stdout = new StringBuilder();
-            try (BufferedReader r = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = r.readLine()) != null) {
-                    stdout.append(line).append('\n');
-                }
+            String output = readOutput(process);
+            int exitCode = waitFor(process);
+            return new ScriptExecutionResult(exitCode, output.trim());
+        } catch (IOException e) {
+            throw new ProxyResolutionException("Could not run PowerShell script.", e);
+        } finally {
+            if (file != null && file.exists() && !file.delete()) {
+                file.deleteOnExit();
             }
-
-            process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            String result = stdout.toString().trim();
-            return result.isEmpty() ? null : result;
-        } catch (Exception e) {
-            LOG.log(Level.WARNING, "[WinProxy] PowerShell command failed: " + e.getMessage(), e);
-            return null;
         }
     }
-}
 
+    private List<String> createCommand(File file, String[] arguments) {
+        List<String> command = new ArrayList<String>();
+        command.add("powershell.exe");
+        command.add("-NoProfile");
+        command.add("-ExecutionPolicy");
+        command.add("Bypass");
+        command.add("-File");
+        command.add(file.getAbsolutePath());
+        for (int i = 0; i < arguments.length; i++) {
+            command.add(arguments[i]);
+        }
+        return command;
+    }
+
+    private String readOutput(Process process) throws IOException {
+        StringBuilder builder = new StringBuilder();
+        BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+        try {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (builder.length() > 0) {
+                    builder.append(System.lineSeparator());
+                }
+                builder.append(line);
+            }
+            return builder.toString();
+        } finally {
+            reader.close();
+        }
+    }
+
+    private int waitFor(Process process) {
+        try {
+            return process.waitFor();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ProxyResolutionException("PowerShell script was interrupted.", e);
+        }
+    }
+
+    static String escapePowerShellSingleQuoted(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replace("'", "''");
+    }
+}
