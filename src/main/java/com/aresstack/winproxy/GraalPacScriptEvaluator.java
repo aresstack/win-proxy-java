@@ -63,9 +63,9 @@ public final class GraalPacScriptEvaluator implements PacEvaluator {
                 "function isResolvable(host) { return dnsResolve(host) !== null; }\n" +
                 "function isInNet(host, pattern, mask) { var resolved = dnsResolve(host); if (resolved === null) { return false; } return pacHostResolver.isInNet(resolved, pacString(pattern), pacString(mask)); }\n" +
                 "function myIpAddress() { return pacHostResolver.myIpAddress(); }\n" +
-                "function weekdayRange() { return pacHostResolver.weekdayRange.apply(pacHostResolver, arguments); }\n" +
-                "function dateRange() { return pacHostResolver.dateRange.apply(pacHostResolver, arguments); }\n" +
-                "function timeRange() { return pacHostResolver.timeRange.apply(pacHostResolver, arguments); }\n";
+                "function weekdayRange() { return true; }\n" +
+                "function dateRange() { return true; }\n" +
+                "function timeRange() { return true; }\n";
     }
 
     /**
@@ -101,18 +101,6 @@ public final class GraalPacScriptEvaluator implements PacEvaluator {
             } catch (RuntimeException e) {
                 return false;
             }
-        }
-
-        public boolean weekdayRange(Object first, Object second, Object third, Object fourth) {
-            return true;
-        }
-
-        public boolean dateRange(Object first, Object second, Object third, Object fourth, Object fifth, Object sixth, Object seventh) {
-            return true;
-        }
-
-        public boolean timeRange(Object first, Object second, Object third, Object fourth, Object fifth, Object sixth, Object seventh) {
-            return true;
         }
 
         private long toIpv4(String address) {

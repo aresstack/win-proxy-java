@@ -88,8 +88,8 @@ The built-in resolver checks:
 
 Once a PAC URL is known, the script is downloaded by `PacScriptLoader`.
 
-The default implementation uses `URLConnection`, so it works without additional HTTP client
-dependencies.
+The default implementation uses `URLConnection` with `Proxy.NO_PROXY` and bounded connect/read
+timeouts to avoid recursive proxy resolution while the PAC file itself is being loaded.
 
 ### Stage 3: Evaluate the PAC script with GraalJS
 
@@ -107,11 +107,11 @@ Supported PAC result forms include:
 DIRECT
 PROXY proxy.example.com:8080
 HTTPS proxy.example.com:8443
-SOCKS proxy.example.com:1080
 ```
 
-The first supported non-direct proxy entry is returned. `DIRECT` produces an empty proxy
-result.
+`SOCKS` entries are currently ignored because `ProxyResult` intentionally models HTTP-style
+Java proxies only. The first supported non-direct proxy entry is returned. `DIRECT` produces
+an empty proxy result.
 
 ## Quick start
 
@@ -289,6 +289,7 @@ if (!proxy.isDirect()) {
 
 - PAC evaluation depends on the PAC helper functions currently provided by the evaluator.
   Complex enterprise PAC files may require additional helper functions.
+- SOCKS PAC entries are ignored until `ProxyResult` carries proxy type information.
 - `WINDOWS_PAC` depends on PowerShell availability and local execution policy.
 - Registry-based PAC URL discovery is Windows-specific.
 - Maven Central versions are immutable. Publish fixes with a new version.

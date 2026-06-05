@@ -21,7 +21,13 @@ function Invoke-RequiredCommand([string]$Command, [string[]]$Arguments) {
 function Get-ProjectVersion() {
     $pomPath = Join-Path $PSScriptRoot "pom.xml"
     [xml]$pom = Get-Content $pomPath
-    return $pom.project.version
+    $namespaceManager = New-Object System.Xml.XmlNamespaceManager($pom.NameTable)
+    $namespaceManager.AddNamespace("m", "http://maven.apache.org/POM/4.0.0")
+    $versionNode = $pom.SelectSingleNode("/m:project/m:version", $namespaceManager)
+    if ($null -ne $versionNode -and -not [string]::IsNullOrWhiteSpace($versionNode.InnerText)) {
+        return $versionNode.InnerText.Trim()
+    }
+    return $null
 }
 
 function Assert-CleanWorkingTree() {
