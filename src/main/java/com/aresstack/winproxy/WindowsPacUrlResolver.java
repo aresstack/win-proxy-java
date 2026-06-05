@@ -13,9 +13,14 @@ public final class WindowsPacUrlResolver implements PacUrlResolver {
             return PacUrlResolution.found(autoConfigUrl.trim(), "registry:AutoConfigURL");
         }
 
-        String defaultConnectionSettings = RegistryReader.queryValueFromAllHives("DefaultConnectionSettings");
-        if (hasText(defaultConnectionSettings) && containsWpadFlag(defaultConnectionSettings)) {
-            return PacUrlResolution.found(WPAD_URL, "registry:DefaultConnectionSettings");
+        String embeddedPacUrl = RegistryReader.queryAutoConfigUrlFromBlob();
+        if (hasText(embeddedPacUrl)) {
+            return PacUrlResolution.found(embeddedPacUrl.trim(), "registry:DefaultConnectionSettings");
+        }
+
+        int flags = RegistryReader.queryConnectionFlags();
+        if ((flags & RegistryReader.FLAG_AUTO_DETECT) != 0) {
+            return PacUrlResolution.found(WPAD_URL, "registry:DefaultConnectionSettings:auto-detect");
         }
 
         String autoDetect = RegistryReader.queryValueFromAllHives("AutoDetect");
@@ -24,11 +29,6 @@ public final class WindowsPacUrlResolver implements PacUrlResolver {
         }
 
         return PacUrlResolution.notFound();
-    }
-
-    private boolean containsWpadFlag(String value) {
-        String normalized = value.replace(" ", "").toLowerCase();
-        return normalized.contains("09") || normalized.contains("0d") || normalized.contains("05");
     }
 
     private boolean hasText(String value) {

@@ -64,7 +64,7 @@ public final class WindowsProxyResolver {
     public ProxyResult resolve(String targetUrl) {
         ProxyMode mode = configuration.getMode();
         if (mode == ProxyMode.DISABLED) {
-            return ProxyResult.direct();
+            return ProxyResult.direct("disabled");
         }
         if (mode == ProxyMode.MANUAL) {
             return manualProxyResolver.resolve(configuration);
@@ -90,11 +90,7 @@ public final class WindowsProxyResolver {
             return resolveRegistry(targetUrl);
         }
         String pacScript = pacScriptLoader.load(pacUrlResolution.getPacUrl());
-        ProxyResult result = pacEvaluator.evaluate(pacScript, targetUrl);
-        if (!result.isDirect()) {
-            return result;
-        }
-        return resolveRegistry(targetUrl);
+        return pacEvaluator.evaluate(pacScript, targetUrl);
     }
 
     /**
@@ -185,7 +181,7 @@ public final class WindowsProxyResolver {
     @Deprecated
     public ProxyResult resolve(String targetUrl, PacUrlSource source, String powerShellScript) {
         if (source == null || source == PacUrlSource.DIRECT) {
-            return ProxyResult.direct();
+            return ProxyResult.direct("legacy-direct-source");
         }
         String pacUrl = resolvePacUrl(source, powerShellScript);
         if (pacUrl == null || pacUrl.trim().length() == 0) {

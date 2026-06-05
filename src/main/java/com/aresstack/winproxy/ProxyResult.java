@@ -9,15 +9,6 @@ import java.net.Proxy;
  * Provides both structured access ({@link #getHost()}, {@link #getPort()}) and a
  * convenience method {@link #toJavaProxy()} to create a {@link java.net.Proxy} for
  * direct use with {@link java.net.URLConnection} or OkHttp.
- *
- * <pre>{@code
- * ProxyResult result = WindowsProxyResolver.resolve("https://example.com");
- * if (result.isDirect()) {
- *     conn = url.openConnection();
- * } else {
- *     conn = url.openConnection(result.toJavaProxy());
- * }
- * }</pre>
  */
 public final class ProxyResult {
 
@@ -38,9 +29,19 @@ public final class ProxyResult {
         return new ProxyResult(true, null, 0, reason);
     }
 
+    /** Creates a DIRECT result with a generic reason. */
+    public static ProxyResult direct() {
+        return direct("direct");
+    }
+
     /** Creates a PROXY result. */
     public static ProxyResult proxy(String host, int port, String reason) {
         return new ProxyResult(false, host, port, reason);
+    }
+
+    /** Creates a PROXY result with a generic reason. */
+    public static ProxyResult of(String host, int port) {
+        return proxy(host, port, "resolved");
     }
 
     /** Returns {@code true} if the target URL should be accessed directly (no proxy). */
@@ -67,4 +68,3 @@ public final class ProxyResult {
         return "PROXY " + host + ":" + port + " (" + reason + ")";
     }
 }
-

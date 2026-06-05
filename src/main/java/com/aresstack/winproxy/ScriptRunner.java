@@ -8,11 +8,14 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Executes PowerShell scripts with a temporary script file.
  */
 final class ScriptRunner {
+
+    private static final int TIMEOUT_SECONDS = 15;
 
     private final String script;
 
@@ -26,12 +29,13 @@ final class ScriptRunner {
 
     ScriptExecutionResult runWithArguments(String... arguments) {
         File file = null;
+        Process process = null;
         try {
             file = File.createTempFile("win-proxy-java-", ".ps1");
             Files.write(file.toPath(), script.getBytes(StandardCharsets.UTF_8));
 
             List<String> command = createCommand(file, arguments);
-            Process process = new ProcessBuilder(command)
+            process = new ProcessBuilder(command)
                     .redirectErrorStream(true)
                     .start();
 
@@ -41,6 +45,9 @@ final class ScriptRunner {
         } catch (IOException e) {
             throw new ProxyResolutionException("Could not run PowerShell script.", e);
         } finally {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+            }
             if (file != null && file.exists() && !file.delete()) {
                 file.deleteOnExit();
             }
@@ -56,7 +63,9 @@ final class ScriptRunner {
         command.add("-File");
         command.add(file.getAbsolutePath());
         for (int i = 0; i < arguments.length; i++) {
-            command.add(arguments[i]);
+            if (arguments[i] != null && arguments[i].trim().length() > 0) {
+                command.add(arguments[i]);
+            }
         }
         return command;
     }
@@ -80,7 +89,11 @@ final class ScriptRunner {
 
     private int waitFor(Process process) {
         try {
-            return process.waitFor();
+            if (!process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                throw new ProxyResolutionException("PowerShell script timed out after " + TIMEOUT_SECONDS + " seconds.");
+            }
+            return process.exitValue();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new ProxyResolutionException("PowerShell script was interrupted.", e);
