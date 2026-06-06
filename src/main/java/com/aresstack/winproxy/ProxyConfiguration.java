@@ -16,11 +16,12 @@ public final class ProxyConfiguration {
 
     private ProxyConfiguration(Builder builder) {
         this.mode = builder.mode == null ? ProxyMode.PAC_URL : builder.mode;
-        this.testUrl = builder.testUrl == null ? ProxyDefaults.DEFAULT_TEST_URL : builder.testUrl;
-        this.pacUrl = builder.pacUrl;
-        this.pacUrlDiscoveryScript = builder.pacUrlDiscoveryScript;
-        this.windowsPacScript = builder.windowsPacScript;
-        this.manualProxyHost = builder.manualProxyHost;
+        this.testUrl = defaultIfBlank(builder.testUrl, ProxyDefaults.DEFAULT_TEST_URL);
+        this.pacUrl = trimToNull(builder.pacUrl);
+        this.pacUrlDiscoveryScript = defaultIfBlank(builder.pacUrlDiscoveryScript,
+                ProxyDefaults.DEFAULT_PAC_URL_DISCOVERY_SCRIPT);
+        this.windowsPacScript = defaultIfBlank(builder.windowsPacScript, ProxyDefaults.DEFAULT_WINDOWS_PAC_SCRIPT);
+        this.manualProxyHost = trimToNull(builder.manualProxyHost);
         this.manualProxyPort = builder.manualProxyPort;
         this.debugEnabled = builder.debugEnabled;
     }
@@ -73,6 +74,19 @@ public final class ProxyConfiguration {
 
     public boolean isDebugEnabled() {
         return debugEnabled;
+    }
+
+    private static String defaultIfBlank(String value, String defaultValue) {
+        String trimmed = trimToNull(value);
+        return trimmed == null ? defaultValue : trimmed;
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.length() == 0 ? null : trimmed;
     }
 
     /**

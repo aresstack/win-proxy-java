@@ -25,6 +25,12 @@ public final class WindowsProxyResolver {
      *
      * @param configuration proxy configuration
      */
+    public WindowsProxyResolver(String pacUrlDiscoveryScript) {
+        this(ProxyConfiguration.builder()
+                .pacUrlDiscoveryScript(pacUrlDiscoveryScript)
+                .build());
+    }
+
     public WindowsProxyResolver(ProxyConfiguration configuration) {
         this(
                 configuration,
@@ -175,12 +181,13 @@ public final class WindowsProxyResolver {
      * @deprecated Use {@link ProxyConfiguration} and {@link ProxyMode}.
      */
     @Deprecated
-    public String resolvePacUrl(PacUrlSource source, String powerShellScript) {
-        if (source == null || source == PacUrlSource.DIRECT) {
-            return null;
+    public String resolvePacUrl(PacUrlSource source, String pacUrlOrScript) {
+        PacUrlSource effectiveSource = source == null ? PacUrlSource.POWERSHELL : source;
+        if (effectiveSource == PacUrlSource.DIRECT) {
+            return pacUrlOrScript == null || pacUrlOrScript.trim().length() == 0 ? null : pacUrlOrScript.trim();
         }
-        if (source == PacUrlSource.POWERSHELL) {
-            return discoverPacUrlWithPowerShell(powerShellScript);
+        if (effectiveSource == PacUrlSource.POWERSHELL) {
+            return discoverPacUrlWithPowerShell(pacUrlOrScript);
         }
         PacUrlResolution resolution = new WindowsPacUrlResolver().resolve();
         return resolution.isPresent() ? resolution.getPacUrl() : null;
@@ -196,11 +203,20 @@ public final class WindowsProxyResolver {
      * @deprecated Use {@link #resolve(String)} with {@link ProxyConfiguration}.
      */
     @Deprecated
-    public ProxyResult resolve(String targetUrl, PacUrlSource source, String powerShellScript) {
-        if (source == null || source == PacUrlSource.DIRECT) {
-            return ProxyResult.direct("legacy-direct-source");
+    public ProxyResult resolve(String targetUrl, PacUrlSource source, String pacUrlOrScript) {
+        PacUrlSource effectiveSource = source == null ? PacUrlSource.POWERSHELL : source;
+        if (effectiveSource == PacUrlSource.DIRECT) {
+            if (pacUrlOrScript == null || pacUrlOrScript.trim().length() == 0) {
+                return ProxyResult.direct("pac-url-empty");
+            }
+            try {
+                String script = pacScriptLoader.load(pacUrlOrScript.trim());
+                return pacEvaluator.evaluate(script, targetUrl);
+            } catch (ProxyResolutionException e) {
+                return resolveRegistry(targetUrl);
+            }
         }
-        String pacUrl = resolvePacUrl(source, powerShellScript);
+        String pacUrl = resolvePacUrl(effectiveSource, pacUrlOrScript);
         if (pacUrl == null || pacUrl.trim().length() == 0) {
             return resolveRegistry(targetUrl);
         }
@@ -213,10 +229,10 @@ public final class WindowsProxyResolver {
     }
 
     private static PacUrlResolver createPacUrlResolver(ProxyConfiguration configuration) {
-        if (configuration != null
-                && configuration.getPacUrlDiscoveryScript() != null
-                && configuration.getPacUrlDiscoveryScript().trim().length() > 0) {
-            return new PowerShellPacUrlResolver(configuration.getPacUrlDiscoveryScript());
+        ProxyConfiguration effectiveConfiguration = configuration == null ? ProxyConfiguration.defaults() : configuration;
+        if (effectiveConfiguration.getPacUrlDiscoveryScript() != null
+                && effectiveConfiguration.getPacUrlDiscoveryScript().trim().length() > 0) {
+            return new PowerShellPacUrlResolver(effectiveConfiguration.getPacUrlDiscoveryScript());
         }
         return new WindowsPacUrlResolver();
     }

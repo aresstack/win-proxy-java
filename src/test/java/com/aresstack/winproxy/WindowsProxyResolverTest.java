@@ -15,6 +15,34 @@ class WindowsProxyResolverTest {
 
         assertEquals(ProxyMode.PAC_URL, configuration.getMode());
         assertEquals(ProxyDefaults.DEFAULT_TEST_URL, configuration.getTestUrl());
+        assertEquals(ProxyDefaults.DEFAULT_PAC_URL_DISCOVERY_SCRIPT, configuration.getPacUrlDiscoveryScript());
+        assertEquals(ProxyDefaults.DEFAULT_WINDOWS_PAC_SCRIPT, configuration.getWindowsPacScript());
+    }
+
+    @Test
+    void blankValuesFallBackToDefaultConfigurationValues() {
+        ProxyConfiguration configuration = ProxyConfiguration.builder()
+                .testUrl(" ")
+                .pacUrl(" ")
+                .pacUrlDiscoveryScript(" ")
+                .windowsPacScript(" ")
+                .manualProxyHost(" ")
+                .build();
+
+        assertEquals(ProxyDefaults.DEFAULT_TEST_URL, configuration.getTestUrl());
+        assertEquals(null, configuration.getPacUrl());
+        assertEquals(ProxyDefaults.DEFAULT_PAC_URL_DISCOVERY_SCRIPT, configuration.getPacUrlDiscoveryScript());
+        assertEquals(ProxyDefaults.DEFAULT_WINDOWS_PAC_SCRIPT, configuration.getWindowsPacScript());
+        assertEquals(null, configuration.getManualProxyHost());
+    }
+
+    @Test
+    void customPacUrlDiscoveryScriptOverridesDefaultScript() {
+        ProxyConfiguration configuration = ProxyConfiguration.builder()
+                .pacUrlDiscoveryScript("Write-Output 'http://example.com/wpad.dat'")
+                .build();
+
+        assertEquals("Write-Output 'http://example.com/wpad.dat'", configuration.getPacUrlDiscoveryScript());
     }
 
     @Test

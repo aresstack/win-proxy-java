@@ -4,8 +4,7 @@ import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Value;
 
 import java.net.InetAddress;
-import java.net.URI;
-import java.net.UnknownHostException;
+import java.net.URL;
 
 /**
  * Evaluates PAC scripts with GraalJS.
@@ -20,29 +19,30 @@ public final class GraalPacScriptEvaluator implements PacEvaluator {
 
     public ProxyResult evaluate(String pacScript, String targetUrl) {
         if (pacScript == null || pacScript.trim().length() == 0) {
-            return ProxyResult.direct("empty-pac-script");
+            throw new ProxyResolutionException("PAC script must not be empty.");
         }
+        Context context = null;
         try {
-            URI uri = URI.create(targetUrl);
-            String host = uri.getHost();
-            Context context = Context.newBuilder("js")
+            String host = extractHost(targetUrl);
+            context = Context.newBuilder("js")
                     .allowAllAccess(false)
+                    .option("engine.WarnInterpreterOnly", "false")
                     .build();
-            try {
-                context.getBindings("js").putMember("pacHostResolver", new PacHostResolver());
-                context.eval("js", createPacHelperScript());
-                context.eval("js", pacScript);
-                Value function = context.getBindings("js").getMember("FindProxyForURL");
-                if (function == null || !function.canExecute()) {
-                    return ProxyResult.direct("missing-find-proxy-for-url");
-                }
-                Value value = function.execute(targetUrl, host);
-                return proxyResultParser.parse(value == null ? null : value.asString());
-            } finally {
-                context.close();
+            String script = createPacHelperScript() + "\n\n" + pacScript + "\n\n"
+                    + "FindProxyForURL(" + jsStringLiteral(targetUrl) + ", " + jsStringLiteral(host) + ");";
+            Value value = context.eval("js", script);
+            if (value == null || value.isNull()) {
+                throw new ProxyResolutionException("PAC script returned no result for " + targetUrl + ".");
             }
+            return proxyResultParser.parse(value.asString());
+        } catch (ProxyResolutionException e) {
+            throw e;
         } catch (RuntimeException e) {
             throw new ProxyResolutionException("Could not evaluate PAC script for " + targetUrl + ".", e);
+        } finally {
+            if (context != null) {
+                context.close();
+            }
         }
     }
 
@@ -51,72 +51,60 @@ public final class GraalPacScriptEvaluator implements PacEvaluator {
         return evaluate(pacScript, targetUrl);
     }
 
-    private String createPacHelperScript() {
-        return "function pacString(value) { return value === null || value === undefined ? '' : String(value); }\n" +
-                "function pacLower(value) { return pacString(value).toLowerCase(); }\n" +
-                "function dnsDomainIs(host, domain) { var h = pacLower(host); var d = pacLower(domain); return h.length >= d.length && h.substring(h.length - d.length) === d; }\n" +
-                "function shExpMatch(str, pattern) { var escaped = pacString(pattern).replace(/[.+^${}()|[\\]\\\\]/g, '\\\\$&'); var re = '^' + escaped.replace(/\\*/g, '.*').replace(/\\?/g, '.') + '$'; return new RegExp(re, 'i').test(pacString(str)); }\n" +
-                "function isPlainHostName(host) { return pacString(host).indexOf('.') < 0; }\n" +
-                "function localHostOrDomainIs(host, hostdom) { var h = pacLower(host); var hd = pacLower(hostdom); return h === hd || (hd.indexOf(h + '.') === 0); }\n" +
-                "function dnsDomainLevels(host) { return pacString(host).split('.').length - 1; }\n" +
-                "function dnsResolve(host) { return pacHostResolver.dnsResolve(pacString(host)); }\n" +
-                "function isResolvable(host) { return dnsResolve(host) !== null; }\n" +
-                "function isInNet(host, pattern, mask) { var resolved = dnsResolve(host); if (resolved === null) { return false; } return pacHostResolver.isInNet(resolved, pacString(pattern), pacString(mask)); }\n" +
-                "function myIpAddress() { return pacHostResolver.myIpAddress(); }\n" +
-                "function weekdayRange() { return true; }\n" +
-                "function dateRange() { return true; }\n" +
-                "function timeRange() { return true; }\n";
+    private static String extractHost(String targetUrl) {
+        try {
+            return new URL(targetUrl).getHost();
+        } catch (Exception e) {
+            return targetUrl;
+        }
     }
 
-    /**
-     * Provides PAC helper implementations to GraalJS.
-     */
-    public static final class PacHostResolver {
-
-        public String dnsResolve(String host) {
-            if (host == null || host.trim().length() == 0) {
-                return null;
-            }
-            try {
-                return InetAddress.getByName(host).getHostAddress();
-            } catch (UnknownHostException e) {
-                return null;
-            }
+    private static String jsStringLiteral(String value) {
+        if (value == null) {
+            return "\"\"";
         }
+        return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+    }
 
-        public String myIpAddress() {
-            try {
-                return InetAddress.getLocalHost().getHostAddress();
-            } catch (UnknownHostException e) {
-                return "127.0.0.1";
-            }
+    private String createPacHelperScript() {
+        String myIp;
+        try {
+            myIp = InetAddress.getLocalHost().getHostAddress();
+        } catch (Exception e) {
+            myIp = "127.0.0.1";
         }
-
-        public boolean isInNet(String address, String pattern, String mask) {
-            try {
-                long addressValue = toIpv4(address);
-                long patternValue = toIpv4(pattern);
-                long maskValue = toIpv4(mask);
-                return (addressValue & maskValue) == (patternValue & maskValue);
-            } catch (RuntimeException e) {
-                return false;
-            }
-        }
-
-        private long toIpv4(String address) {
-            String[] parts = address.split("\\.");
-            if (parts.length != 4) {
-                throw new IllegalArgumentException("Not an IPv4 address: " + address);
-            }
-            long value = 0;
-            for (int i = 0; i < parts.length; i++) {
-                int part = Integer.parseInt(parts[i]);
-                if (part < 0 || part > 255) {
-                    throw new IllegalArgumentException("Invalid IPv4 segment: " + parts[i]);
-                }
-                value = (value << 8) | part;
-            }
-            return value;
-        }
+        return "function isPlainHostName(host) { return host.indexOf('.') === -1; }\n" +
+                "function dnsDomainIs(host, domain) {\n" +
+                "  return host.length >= domain.length &&\n" +
+                "         host.substring(host.length - domain.length).toLowerCase() === domain.toLowerCase();\n" +
+                "}\n" +
+                "function localHostOrDomainIs(host, hostdom) {\n" +
+                "  return host.toLowerCase() === hostdom.toLowerCase() ||\n" +
+                "         hostdom.toLowerCase().indexOf(host.toLowerCase() + '.') === 0;\n" +
+                "}\n" +
+                "function isResolvable(host) { try { dnsResolve(host); return true; } catch(e) { return false; } }\n" +
+                "function dnsResolve(host) {\n" +
+                "  if (/^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$/.test(host)) return host;\n" +
+                "  return '0.0.0.0';\n" +
+                "}\n" +
+                "function myIpAddress() { return '" + myIp + "'; }\n" +
+                "function dnsDomainLevels(host) { return host.split('.').length - 1; }\n" +
+                "function shExpMatch(str, shexp) {\n" +
+                "  var re = shexp.replace(/\\./g, '\\\\.').replace(/\\*/g, '.*').replace(/\\?/g, '.');\n" +
+                "  return new RegExp('^' + re + '$', 'i').test(str);\n" +
+                "}\n" +
+                "function isInNet(host, pattern, mask) {\n" +
+                "  function ipToLong(ip) {\n" +
+                "    var parts = ip.split('.');\n" +
+                "    return ((+parts[0]) << 24 | (+parts[1]) << 16 | (+parts[2]) << 8 | (+parts[3])) >>> 0;\n" +
+                "  }\n" +
+                "  var ip = /^\\d{1,3}\\./.test(host) ? host : dnsResolve(host);\n" +
+                "  if (!ip) return false;\n" +
+                "  return (ipToLong(ip) & ipToLong(mask)) === (ipToLong(pattern) & ipToLong(mask));\n" +
+                "}\n" +
+                "function weekdayRange() { return true; }\n" +
+                "function dateRange() { return true; }\n" +
+                "function timeRange() { return true; }\n" +
+                "function alert(msg) {}\n";
     }
 }
