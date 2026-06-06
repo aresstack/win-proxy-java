@@ -2,11 +2,21 @@ plugins {
     id 'java'
 }
 
-sourceCompatibility = 1.8
-targetCompatibility = 1.8
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
 
 group = 'com.aresstack'
 version = '0.1.0-beta.2'
+
+test {
+    useJUnitPlatform()
+    testLogging {
+        showStandardStreams = true
+        events 'passed', 'failed', 'skipped'
+    }
+}
 
 compileJava.options.encoding = 'UTF-8'
 compileTestJava.options.encoding = 'UTF-8'
@@ -20,9 +30,5 @@ dependencies {
     implementation 'org.graalvm.js:js:21.2.0'
 
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
-
-test {
-    useJUnitPlatform()
-}
-
