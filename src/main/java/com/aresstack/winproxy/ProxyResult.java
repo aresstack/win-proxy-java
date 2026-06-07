@@ -95,10 +95,50 @@ public final class ProxyResult {
     /** Returns a machine-readable diagnostic reason for this result. */
     public String getReason() { return reason; }
 
-    /** Converts to {@link java.net.Proxy}. Returns {@link Proxy#NO_PROXY} for non-PROXY results. */
+    /**
+     * Converts to {@link java.net.Proxy}, honouring the {@link Kind}:
+     * <ul>
+     *   <li>{@link Kind#PROXY} → an HTTP {@link Proxy} for {@code host:port},</li>
+     *   <li>{@link Kind#DIRECT} → {@link Proxy#NO_PROXY},</li>
+     *   <li>{@link Kind#ERROR} / {@link Kind#NOT_IMPLEMENTED} → {@link IllegalStateException}.</li>
+     * </ul>
+     * Errors and not-implemented results deliberately throw instead of silently
+     * degrading to {@link Proxy#NO_PROXY}, so a failed resolution can never be
+     * mistaken for a genuine DIRECT route. Callers that explicitly want a best-effort
+     * NO_PROXY for those kinds must use {@link #toJavaProxyOrNoProxy()}.
+     *
+     * @throws IllegalStateException if this result is an {@link Kind#ERROR} or
+     *         {@link Kind#NOT_IMPLEMENTED}.
+     */
     public Proxy toJavaProxy() {
-        if (kind != Kind.PROXY) return Proxy.NO_PROXY;
-        return new Proxy(Proxy.Type.HTTP, new InetSocketAddress(host, port));
+        switch (kind) {
+            case PROXY:
+                return new Proxy(Proxy.Type.HTTP, new InetSocketAddress(host, port));
+            case DIRECT:
+                return Proxy.NO_PROXY;
+            default:
+                throw new IllegalStateException(
+                        "Cannot convert a " + kind + " ProxyResult to java.net.Proxy: " + this);
+        }
+    }
+
+    /**
+     * Best-effort variant of {@link #toJavaProxy()} that never throws:
+     * <ul>
+     *   <li>{@link Kind#PROXY} → an HTTP {@link Proxy} for {@code host:port},</li>
+     *   <li>{@link Kind#DIRECT}, {@link Kind#ERROR}, {@link Kind#NOT_IMPLEMENTED}
+     *       → {@link Proxy#NO_PROXY}.</li>
+     * </ul>
+     * Only use this when the caller has <em>explicitly</em> decided that a failed or
+     * not-implemented resolution should fall back to a direct connection. Diagnostics
+     * must keep using the original {@link ProxyResult} (and {@link #toJavaProxy()}),
+     * so an {@link Kind#ERROR} is never masked as a successful DIRECT.
+     */
+    public Proxy toJavaProxyOrNoProxy() {
+        if (kind == Kind.PROXY) {
+            return new Proxy(Proxy.Type.HTTP, new InetSocketAddress(host, port));
+        }
+        return Proxy.NO_PROXY;
     }
 
     @Override

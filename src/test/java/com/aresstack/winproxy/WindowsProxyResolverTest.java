@@ -2,9 +2,13 @@ package com.aresstack.winproxy;
 
 import org.junit.jupiter.api.Test;
 
+import java.net.Proxy;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class WindowsProxyResolverTest {
@@ -273,5 +277,37 @@ class WindowsProxyResolverTest {
         assertNotNull(ProxyDefaults.DEFAULT_WINDOWS_PAC_SCRIPT);
         assertTrue(ProxyDefaults.DEFAULT_WINDOWS_PAC_SCRIPT.contains("GetSystemWebProxy"));
         assertTrue(ProxyDefaults.DEFAULT_WINDOWS_PAC_SCRIPT.contains("ProxyServer"));
+    }
+
+    // ── ProxyResult → java.net.Proxy conversion ──
+
+    @Test
+    void proxyResultConvertsToHttpJavaProxy() {
+        Proxy proxy = ProxyResult.of("proxy.example.com", 8080).toJavaProxy();
+
+        assertEquals(Proxy.Type.HTTP, proxy.type());
+    }
+
+    @Test
+    void directResultConvertsToNoProxy() {
+        assertSame(Proxy.NO_PROXY, ProxyResult.direct("pac-direct").toJavaProxy());
+    }
+
+    @Test
+    void errorResultThrowsOnToJavaProxy() {
+        assertThrows(IllegalStateException.class, () -> ProxyResult.error("pac-url-not-found").toJavaProxy());
+    }
+
+    @Test
+    void notImplementedResultThrowsOnToJavaProxy() {
+        assertThrows(IllegalStateException.class, () -> ProxyResult.notImplemented("reserved").toJavaProxy());
+    }
+
+    @Test
+    void bestEffortConversionNeverThrowsForErrorOrNotImplemented() {
+        assertSame(Proxy.NO_PROXY, ProxyResult.error("pac-url-not-found").toJavaProxyOrNoProxy());
+        assertSame(Proxy.NO_PROXY, ProxyResult.notImplemented("reserved").toJavaProxyOrNoProxy());
+        assertSame(Proxy.NO_PROXY, ProxyResult.direct("pac-direct").toJavaProxyOrNoProxy());
+        assertEquals(Proxy.Type.HTTP, ProxyResult.of("proxy.example.com", 8080).toJavaProxyOrNoProxy().type());
     }
 }

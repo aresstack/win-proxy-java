@@ -133,12 +133,18 @@ public final class ProxyExample {
 
         ProxyResult proxy = resolver.resolve("https://plugins.gradle.org/m2/");
 
+        if (proxy.isProxy()) {
+            System.out.println(proxy.getHost() + ":" + proxy.getPort());
+            return;
+        }
+
         if (proxy.isDirect()) {
             System.out.println("DIRECT");
             return;
         }
 
-        System.out.println(proxy.getHost() + ":" + proxy.getPort());
+        // ERROR / NOT_IMPLEMENTED must never be treated as a silent DIRECT.
+        throw new IllegalStateException("Proxy resolution failed: " + proxy);
     }
 }
 ```
@@ -305,6 +311,29 @@ if (proxy.isProxy()) {
 - Windows for automatic registry-based discovery.
 - GraalJS on the runtime classpath for PAC script evaluation.
 - PowerShell only when using `PAC_URL_POWERSHELL` or `POWERSHELL_ROUTE_RESOLVER_LEGACY`.
+
+## Building from source
+
+The published **artifact targets Java 8** (`maven.compiler.source/target = 1.8`), so the
+library runs on any JDK 8+ at runtime.
+
+There are two equivalent build paths:
+
+- **Maven** (used by CI / the release) runs on **JDK 8**:
+  ```bash
+  mvn -B clean verify     # tests + sources jar + javadoc jar (+ GPG sign on release)
+  ```
+- **Gradle wrapper** is pinned to **Gradle 8.14.3**, which still runs on **JDK 8**, so
+  `./gradlew test` is reproducible on the same JDK as the artifact target:
+  ```bash
+  ./gradlew test
+  ```
+  Note: newer Gradle 9.x would require JDK 17+ just to *run* Gradle; the wrapper is kept on
+  the 8.14.x line on purpose so a JDK 8 toolchain can build and test the library end to end.
+  The manual, environment-touching diagnostic is opt-in:
+  ```bash
+  ./gradlew test -Dwinproxy.diagnostics=true
+  ```
 
 ## Limitations
 

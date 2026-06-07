@@ -34,10 +34,14 @@ final class ScriptRunner {
         this.script = script;
     }
 
-    String run() {
-        return runWithArguments(new String[0]).getOutput();
-    }
-
+    /**
+     * Runs the script through a temporary {@code .ps1} file via {@code powershell.exe -File}.
+     * <p>
+     * <b>Legacy path — only for the deprecated {@link WindowsPacScriptProxyResolver}
+     * route resolver.</b> PAC URL discovery must use {@link #runInlineCommand()}: the
+     * temporary {@code .ps1} written here is blocked by GPO execution policy / AppLocker
+     * on hardened machines, which is exactly the bug the inline {@code -Command} path fixes.
+     */
     ScriptExecutionResult runWithArguments(String... arguments) {
         File file = null;
         Process process = null;
@@ -142,6 +146,11 @@ final class ScriptRunner {
         return command;
     }
 
+    /**
+     * Builds the legacy {@code powershell.exe ... -File <temp>.ps1} command line for
+     * {@link #runWithArguments(String...)}. Legacy only — discovery must use
+     * {@link #buildInlineCommand()} ({@code -Command}), never this {@code -File} path.
+     */
     private List<String> createCommand(File file, String[] arguments) {
         List<String> command = new ArrayList<String>();
         command.add("powershell.exe");
