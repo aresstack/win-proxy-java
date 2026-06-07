@@ -135,7 +135,7 @@ public final class ProxyExample {
 }
 ```
 
-`resolve(url)` uses `ProxyMode.PAC_URL` by default.
+`resolve(url)` uses `ProxyMode.PAC_URL_POWERSHELL` by default.
 
 ## Explicit configuration
 
@@ -148,7 +148,7 @@ import com.aresstack.winproxy.WindowsProxyResolver;
 public final class ExplicitPacUrlExample {
     public static void main(String[] args) {
         ProxyConfiguration configuration = ProxyConfiguration.builder()
-                .mode(ProxyMode.PAC_URL)
+                .mode(ProxyMode.PAC_URL_POWERSHELL)
                 .testUrl("https://plugins.gradle.org/m2/")
                 .build();
 
@@ -162,22 +162,52 @@ public final class ExplicitPacUrlExample {
 
 ## Proxy modes
 
+Every `PAC_URL_*` mode runs the same pipeline — discover PAC URL → download PAC →
+evaluate `FindProxyForURL` via GraalVM/JavaScript → parse the route. Only the PAC-URL
+discovery differs. No `PAC_URL_*` mode ever falls back to a static/registry/manual/direct
+result; failures surface as an `ERROR` `ProxyResult` with a technical reason.
+
 | Mode | Purpose |
 | --- | --- |
-| `PAC_URL` | Default. Resolve PAC/WPAD URL from Windows, load the PAC script, evaluate it with GraalJS. |
-| `WINDOWS_PAC` | Optional fallback. Ask Windows/.NET/PowerShell for the final proxy directly. |
-| `REGISTRY` | Resolve static proxy settings from the Windows registry. |
-| `MANUAL` | Use a manually supplied proxy host and port. |
-| `DISABLED` | Force direct connections. |
+| `DISABLED` | Force DIRECT. No discovery, no PAC, no fallback. |
+| `MANUAL_PROXY` | Use a manually configured proxy host:port. |
+| `WINDOWS_STATIC_PROXY` | Read the classic static Windows proxy (`ProxyEnable`/`ProxyServer`/`ProxyOverride`). Explicit only — never a silent fallback. |
+| `PAC_URL_MANUAL` | Use a user-configured PAC URL, then download + GraalVM PAC evaluation. |
+| `PAC_URL_POWERSHELL` | Discover the PAC URL via PowerShell (`AutoConfigURL` one-liner, inline `-Command`), then download + GraalVM. **Important path on hardened machines.** |
+| `PAC_URL_WINDOWS_SETTINGS` | Discover the PAC URL via `reg.exe`/Windows settings (all hives/policies, `DefaultConnectionSettings` blob, WPAD auto-detect flag) — no PowerShell — then download + GraalVM. |
+| `POWERSHELL_ROUTE_RESOLVER_LEGACY` | **Deprecated.** Legacy `GetSystemWebProxy()` PowerShell/.NET route resolution (no GraalVM). Not for normal use. |
+| `WINDOWS_NATIVE_PROXY_SETTINGS` | Reserved Java 21/FFM mode. Returns `NOT_IMPLEMENTED`. |
+| `WINDOWS_NATIVE_ROUTE_RESOLVER` | Reserved Java 21/FFM mode. Returns `NOT_IMPLEMENTED`. |
 
-## PAC_URL mode
+### Result kinds
 
-`PAC_URL` is the preferred production path. It keeps the full resolution pipeline inside the
-library and makes each step replaceable.
+`ProxyResult` is exactly one of `PROXY`, `DIRECT`, `ERROR` or `NOT_IMPLEMENTED`
+(`isProxy()` / `isDirect()` / `isError()` / `isNotImplemented()`). `DIRECT` is only returned
+when the mode genuinely yields direct (e.g. `DISABLED`, or a PAC script returning `DIRECT`).
+Discovery/download/evaluation failures return `ERROR` with reasons such as
+`pac-url-not-found`, `pac-url-discovery-failed`, `pac-download-failed` or `pac-evaluation-failed`.
+
+## PAC discovery on hardened machines
+
+`PAC_URL_POWERSHELL` runs the discovery one-liner inline via
+`powershell.exe -Command` (never a temporary `.ps1` in `%TEMP%`), so it keeps working where
+GPO execution policy or AppLocker block unsigned script files. If PowerShell itself is locked
+down, `PAC_URL_WINDOWS_SETTINGS` reads the PAC URL through `reg.exe` without any PowerShell.
 
 ```java
 ProxyConfiguration configuration = ProxyConfiguration.builder()
-        .mode(ProxyMode.PAC_URL)
+        .mode(ProxyMode.PAC_URL_POWERSHELL)
+        .build();
+
+ProxyResult proxy = new WindowsProxyResolver(configuration)
+        .resolve("https://repo.maven.apache.org/maven2/");
+```
+
+## Manual PAC URL
+
+```java
+ProxyConfiguration configuration = ProxyConfiguration.builder()
+        .mode(ProxyMode.PAC_URL_MANUAL)
         .pacUrl("http://proxy.example.com/wpad.dat")
         .build();
 
@@ -185,69 +215,6 @@ ProxyResult proxy = new WindowsProxyResolver(configuration)
         .resolve("https://repo.maven.apache.org/maven2/");
 ```
 
-If `pacUrl` is not set, the resolver discovers it from Windows.
-
-## WINDOWS_PAC fallback mode
-
-`WINDOWS_PAC` is intentionally not the default. It exists for environments where Windows
-itself can resolve the proxy correctly but the PAC script cannot be downloaded or evaluated
-inside the application process.
-
-Internally, this mode uses a PowerShell script with two strategies:
-
-1. `.NET WebRequest.GetSystemWebProxy()` for full Windows proxy/PAC/WPAD handling,
-2. registry fallback for static proxy settings in constrained environments.
-
-The default script returns either:
-
-```text
-host:port
-```
-
-or no output for `DIRECT`.
-
-Example:
-
-```java
-ProxyConfiguration configuration = ProxyConfiguration.builder()
-        .mode(ProxyMode.WINDOWS_PAC)
-        .testUrl("https://plugins.gradle.org/m2/")
-        .build();
-
-ProxyResult proxy = new WindowsProxyResolver(configuration)
-        .resolve(configuration.getTestUrl());
-```
-
-## Discover only the PAC URL
-
-```java
-import com.aresstack.winproxy.PacUrlResolution;
-import com.aresstack.winproxy.WindowsProxyResolver;
-
-public final class DiscoverPacUrlExample {
-    public static void main(String[] args) {
-        WindowsProxyResolver resolver = new WindowsProxyResolver();
-        PacUrlResolution resolution = resolver.discoverPacUrl();
-
-        if (resolution.isPresent()) {
-            System.out.println(resolution.getPacUrl());
-        }
-    }
-}
-```
-
-## Manual proxy
-
-```java
-ProxyConfiguration configuration = ProxyConfiguration.builder()
-        .mode(ProxyMode.MANUAL)
-        .manualProxyHost("proxy.example.com")
-        .manualProxyPort(8080)
-        .build();
-
-ProxyResult proxy = new WindowsProxyResolver(configuration)
-        .resolve("https://repo.maven.apache.org/maven2/");
-```
 
 ## Apply the result to JVM system properties
 
@@ -255,7 +222,7 @@ ProxyResult proxy = new WindowsProxyResolver(configuration)
 ProxyResult proxy = new WindowsProxyResolver()
         .resolve("https://plugins.gradle.org/m2/");
 
-if (!proxy.isDirect()) {
+if (proxy.isProxy()) {
     System.setProperty("https.proxyHost", proxy.getHost());
     System.setProperty("https.proxyPort", String.valueOf(proxy.getPort()));
     System.setProperty("http.proxyHost", proxy.getHost());
@@ -269,28 +236,33 @@ if (!proxy.isDirect()) {
 | --- | --- |
 | `WindowsProxyResolver` | Public facade for proxy resolution. |
 | `ProxyConfiguration` | Immutable configuration object with builder. |
-| `ProxyMode` | Selects the resolution strategy. |
-| `ProxyResult` | Final host/port result or direct connection. |
+| `ProxyMode` | Selects the resolution strategy (see Proxy modes). |
+| `ProxyResult` | PROXY / DIRECT / ERROR / NOT_IMPLEMENTED result. |
+| `PacUrlProxyResolver` | Shared PAC pipeline (discover → load → evaluate → parse). |
 | `PacUrlResolver` | Port for discovering a PAC/WPAD URL. |
+| `FixedPacUrlResolver` | PAC URL from explicit configuration (`PAC_URL_MANUAL`). |
+| `PowerShellPacUrlResolver` | PAC URL via inline PowerShell `-Command` (`PAC_URL_POWERSHELL`). |
+| `WindowsPacUrlResolver` | PAC URL via `reg.exe`/Windows settings (`PAC_URL_WINDOWS_SETTINGS`). |
 | `PacScriptLoader` | Port for loading PAC script content. |
-| `PacEvaluator` | Port for evaluating a PAC script for one target URL. |
-| `WindowsPacUrlResolver` | Windows registry based PAC/WPAD discovery adapter. |
-| `GraalPacScriptEvaluator` | GraalJS based PAC evaluator. |
-| `WindowsPacScriptProxyResolver` | PowerShell/.NET fallback adapter. |
+| `PacEvaluator` / `GraalPacScriptEvaluator` | GraalJS based PAC evaluator. |
+| `PacProxyRouteParser` | Parses the `FindProxyForURL` route string. |
+| `StaticProxySettingsResolver` | Static Windows proxy (`WINDOWS_STATIC_PROXY`). |
+| `ManualProxyResolver` | Manual host:port proxy (`MANUAL_PROXY`). |
+| `WindowsPacScriptProxyResolver` | Deprecated PowerShell/.NET legacy route resolver. |
 
 ## Runtime requirements
 
 - Java 8 or newer.
 - Windows for automatic registry-based discovery.
 - GraalJS on the runtime classpath for PAC script evaluation.
-- PowerShell only when using `WINDOWS_PAC` or explicit PowerShell PAC URL discovery.
+- PowerShell only when using `PAC_URL_POWERSHELL` or `POWERSHELL_ROUTE_RESOLVER_LEGACY`.
 
 ## Limitations
 
 - PAC evaluation depends on the PAC helper functions currently provided by the evaluator.
   Complex enterprise PAC files may require additional helper functions.
 - SOCKS PAC entries are ignored until `ProxyResult` carries proxy type information.
-- `WINDOWS_PAC` depends on PowerShell availability and local execution policy.
+- `POWERSHELL_ROUTE_RESOLVER_LEGACY` is deprecated and depends on PowerShell availability and local execution policy.
 - Registry-based PAC URL discovery is Windows-specific.
 - Maven Central versions are immutable. Publish fixes with a new version.
 

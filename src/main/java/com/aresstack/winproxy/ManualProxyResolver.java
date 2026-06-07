@@ -9,7 +9,7 @@ public final class ManualProxyResolver {
         String host = configuration.getManualProxyHost();
         int port = configuration.getManualProxyPort();
         if (host == null || host.trim().length() == 0 || port < 1 || port > 65535) {
-            return ProxyResult.direct("invalid-manual-proxy");
+            return ProxyResult.error("invalid-manual-proxy");
         }
         return ProxyResult.of(host.trim(), port);
     }

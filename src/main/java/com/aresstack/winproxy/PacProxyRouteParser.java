@@ -1,9 +1,13 @@
 package com.aresstack.winproxy;
 
 /**
- * Parses PAC proxy result strings.
+ * Parses the route string returned by {@code FindProxyForURL} (or a Windows
+ * {@code ProxyServer} value) into a {@link ProxyResult}.
+ * <p>
+ * Examples: {@code "PROXY host:port; DIRECT"}, {@code "DIRECT"}, {@code "host:port"}.
+ * Unsupported entries (e.g. {@code SOCKS}) yield a DIRECT result.
  */
-public final class ProxyResultParser {
+public final class PacProxyRouteParser {
 
     public ProxyResult parse(String pacResult) {
         if (pacResult == null || pacResult.trim().length() == 0) {

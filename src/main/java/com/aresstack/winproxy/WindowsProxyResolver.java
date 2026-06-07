@@ -2,19 +2,27 @@ package com.aresstack.winproxy;
 
 /**
  * Public facade for resolving Windows proxy settings.
+ * <p>
+ * The behaviour is driven entirely by {@link ProxyConfiguration#getMode()}. Each
+ * mode has a single, clearly-defined strategy and never silently falls back to a
+ * different one. In particular, all {@code PAC_URL_*} modes share the one PAC
+ * pipeline ({@link PacUrlProxyResolver}) and only differ in how the PAC URL is
+ * discovered. Failures are reported as {@link ProxyResult#error(String) ERROR}
+ * results with a technical reason instead of a masked DIRECT.
+ *
+ * @see ProxyMode
  */
 public final class WindowsProxyResolver {
 
     private final ProxyConfiguration configuration;
-    private final PacUrlResolver pacUrlResolver;
     private final PacScriptLoader pacScriptLoader;
     private final PacEvaluator pacEvaluator;
     private final StaticProxySettingsResolver staticProxySettingsResolver;
-    private final WindowsPacScriptProxyResolver windowsPacScriptProxyResolver;
     private final ManualProxyResolver manualProxyResolver;
+    private final DirectProxyResolver directProxyResolver;
 
     /**
-     * Create a resolver with the default PAC_URL configuration.
+     * Create a resolver with the default configuration.
      */
     public WindowsProxyResolver() {
         this(ProxyConfiguration.defaults());
@@ -25,215 +33,100 @@ public final class WindowsProxyResolver {
      *
      * @param configuration proxy configuration
      */
-    public WindowsProxyResolver(String pacUrlDiscoveryScript) {
-        this(ProxyConfiguration.builder()
-                .pacUrlDiscoveryScript(pacUrlDiscoveryScript)
-                .build());
-    }
-
     public WindowsProxyResolver(ProxyConfiguration configuration) {
         this(
                 configuration,
-                createPacUrlResolver(configuration),
                 new UrlConnectionPacScriptLoader(),
                 PacEvaluator.createDefault(),
                 new StaticProxySettingsResolver(),
-                new WindowsPacScriptProxyResolver(),
-                new ManualProxyResolver()
+                new ManualProxyResolver(),
+                new DirectProxyResolver()
         );
     }
 
     WindowsProxyResolver(
             ProxyConfiguration configuration,
-            PacUrlResolver pacUrlResolver,
             PacScriptLoader pacScriptLoader,
             PacEvaluator pacEvaluator,
             StaticProxySettingsResolver staticProxySettingsResolver,
-            WindowsPacScriptProxyResolver windowsPacScriptProxyResolver,
-            ManualProxyResolver manualProxyResolver
+            ManualProxyResolver manualProxyResolver,
+            DirectProxyResolver directProxyResolver
     ) {
         this.configuration = configuration == null ? ProxyConfiguration.defaults() : configuration;
-        this.pacUrlResolver = pacUrlResolver;
         this.pacScriptLoader = pacScriptLoader;
         this.pacEvaluator = pacEvaluator;
         this.staticProxySettingsResolver = staticProxySettingsResolver;
-        this.windowsPacScriptProxyResolver = windowsPacScriptProxyResolver;
         this.manualProxyResolver = manualProxyResolver;
+        this.directProxyResolver = directProxyResolver;
     }
 
     /**
      * Resolve the proxy for a target URL using the configured mode.
      *
      * @param targetUrl target URL
-     * @return proxy result or direct
+     * @return proxy result — PROXY, DIRECT, ERROR or NOT_IMPLEMENTED, never {@code null}
      */
     public ProxyResult resolve(String targetUrl) {
         ProxyMode mode = configuration.getMode();
-        if (mode == ProxyMode.DISABLED) {
-            return ProxyResult.direct("disabled");
-        }
-        if (mode == ProxyMode.MANUAL) {
-            return manualProxyResolver.resolve(configuration);
-        }
-        if (mode == ProxyMode.WINDOWS_PAC) {
-            return resolveWindowsPac(targetUrl);
-        }
-        if (mode == ProxyMode.REGISTRY) {
-            return resolveRegistry(targetUrl);
-        }
-        return resolvePacUrl(targetUrl);
-    }
+        switch (mode) {
+            case DISABLED:
+                return directProxyResolver.resolve();
 
-    /**
-     * Resolve a proxy through the default PAC_URL pipeline.
-     *
-     * @param targetUrl target URL
-     * @return proxy result or direct
-     */
-    public ProxyResult resolvePacUrl(String targetUrl) {
-        PacUrlResolution pacUrlResolution;
-        try {
-            pacUrlResolution = discoverPacUrl();
-        } catch (ProxyResolutionException e) {
-            return resolveRegistry(targetUrl);
-        }
-        if (!pacUrlResolution.isPresent()) {
-            return resolveRegistry(targetUrl);
-        }
-        try {
-            String pacScript = pacScriptLoader.load(pacUrlResolution.getPacUrl());
-            return pacEvaluator.evaluate(pacScript, targetUrl);
-        } catch (ProxyResolutionException e) {
-            return resolveRegistry(targetUrl);
+            case MANUAL_PROXY:
+                return manualProxyResolver.resolve(configuration);
+
+            case WINDOWS_STATIC_PROXY:
+                return staticProxySettingsResolver.resolve(effectiveTargetUrl(targetUrl));
+
+            case PAC_URL_MANUAL:
+                return pacPipeline(new FixedPacUrlResolver(configuration.getPacUrl()))
+                        .resolve(effectiveTargetUrl(targetUrl));
+
+            case PAC_URL_POWERSHELL:
+                return pacPipeline(new PowerShellPacUrlResolver(configuration.getPacUrlDiscoveryScript()))
+                        .resolve(effectiveTargetUrl(targetUrl));
+
+            case PAC_URL_WINDOWS_SETTINGS:
+                return pacPipeline(new WindowsPacUrlResolver())
+                        .resolve(effectiveTargetUrl(targetUrl));
+
+            case POWERSHELL_ROUTE_RESOLVER_LEGACY:
+                return resolveLegacyPowerShellRoute(targetUrl);
+
+            case WINDOWS_NATIVE_PROXY_SETTINGS:
+                return new NotImplementedProxyResolver("windows-native-proxy-settings-not-implemented").resolve();
+
+            case WINDOWS_NATIVE_ROUTE_RESOLVER:
+                return new NotImplementedProxyResolver("windows-native-route-resolver-not-implemented").resolve();
+
+            default:
+                return ProxyResult.error("unknown-proxy-mode");
         }
     }
 
-    /**
-     * Discover the PAC/WPAD URL from explicit configuration or Windows.
-     *
-     * @return discovered PAC URL
-     */
-    public PacUrlResolution discoverPacUrl() {
-        if (configuration.getPacUrl() != null && configuration.getPacUrl().trim().length() > 0) {
-            return PacUrlResolution.found(configuration.getPacUrl().trim(), "configuration");
-        }
-        return pacUrlResolver.resolve();
+    private PacUrlProxyResolver pacPipeline(PacUrlResolver pacUrlResolver) {
+        return new PacUrlProxyResolver(pacUrlResolver, pacScriptLoader, pacEvaluator);
     }
 
     /**
-     * Resolve a proxy through Windows/.NET/PowerShell.
+     * Legacy PowerShell/.NET route resolution. Does not fall back to any other mode;
+     * a failure is reported as an ERROR result.
      *
-     * @param targetUrl target URL
-     * @return proxy result or direct
-     */
-    public ProxyResult resolveWindowsPac(String targetUrl) {
-        try {
-            return windowsPacScriptProxyResolver.resolve(configuration, targetUrl);
-        } catch (ProxyResolutionException e) {
-            return resolveRegistry(targetUrl == null || targetUrl.trim().length() == 0 ? configuration.getTestUrl() : targetUrl);
-        }
-    }
-
-    /**
-     * Resolve a proxy from static Windows registry proxy settings.
-     *
-     * @param targetUrl target URL
-     * @return proxy result or direct
-     */
-    public ProxyResult resolveRegistry(String targetUrl) {
-        return staticProxySettingsResolver.resolve(targetUrl);
-    }
-
-    /**
-     * Resolve only the configured or discovered PAC URL.
-     *
-     * @return PAC URL or {@code null}
-     * @deprecated Use {@link #discoverPacUrl()}.
+     * @deprecated Use a {@code PAC_URL_*} mode instead.
      */
     @Deprecated
-    public String resolvePacUrl() {
-        PacUrlResolution resolution = discoverPacUrl();
-        return resolution.isPresent() ? resolution.getPacUrl() : null;
-    }
-
-    /**
-     * Resolve a PAC URL with the default PowerShell script.
-     *
-     * @param script optional script
-     * @return PAC URL or {@code null}
-     */
-    public String discoverPacUrlWithPowerShell(String script) {
+    private ProxyResult resolveLegacyPowerShellRoute(String targetUrl) {
         try {
-            PacUrlResolver resolver = new PowerShellPacUrlResolver(script);
-            PacUrlResolution resolution = resolver.resolve();
-            return resolution.isPresent() ? resolution.getPacUrl() : null;
+            return new WindowsPacScriptProxyResolver().resolve(configuration, effectiveTargetUrl(targetUrl));
         } catch (ProxyResolutionException e) {
-            return null;
+            return ProxyResult.error("legacy-route-resolver-failed");
         }
     }
 
-    /**
-     * Resolve a PAC URL by legacy source.
-     *
-     * @param source legacy PAC URL source
-     * @param powerShellScript optional PowerShell script
-     * @return PAC URL or {@code null}
-     * @deprecated Use {@link ProxyConfiguration} and {@link ProxyMode}.
-     */
-    @Deprecated
-    public String resolvePacUrl(PacUrlSource source, String pacUrlOrScript) {
-        PacUrlSource effectiveSource = source == null ? PacUrlSource.POWERSHELL : source;
-        if (effectiveSource == PacUrlSource.DIRECT) {
-            return pacUrlOrScript == null || pacUrlOrScript.trim().length() == 0 ? null : pacUrlOrScript.trim();
+    private String effectiveTargetUrl(String targetUrl) {
+        if (targetUrl == null || targetUrl.trim().length() == 0) {
+            return configuration.getTestUrl();
         }
-        if (effectiveSource == PacUrlSource.POWERSHELL) {
-            return discoverPacUrlWithPowerShell(pacUrlOrScript);
-        }
-        PacUrlResolution resolution = new WindowsPacUrlResolver().resolve();
-        return resolution.isPresent() ? resolution.getPacUrl() : null;
-    }
-
-    /**
-     * Resolve a proxy for a target URL using the legacy source API.
-     *
-     * @param targetUrl target URL
-     * @param source legacy PAC URL source
-     * @param powerShellScript optional PowerShell script
-     * @return proxy result or direct
-     * @deprecated Use {@link #resolve(String)} with {@link ProxyConfiguration}.
-     */
-    @Deprecated
-    public ProxyResult resolve(String targetUrl, PacUrlSource source, String pacUrlOrScript) {
-        PacUrlSource effectiveSource = source == null ? PacUrlSource.POWERSHELL : source;
-        if (effectiveSource == PacUrlSource.DIRECT) {
-            if (pacUrlOrScript == null || pacUrlOrScript.trim().length() == 0) {
-                return ProxyResult.direct("pac-url-empty");
-            }
-            try {
-                String script = pacScriptLoader.load(pacUrlOrScript.trim());
-                return pacEvaluator.evaluate(script, targetUrl);
-            } catch (ProxyResolutionException e) {
-                return resolveRegistry(targetUrl);
-            }
-        }
-        String pacUrl = resolvePacUrl(effectiveSource, pacUrlOrScript);
-        if (pacUrl == null || pacUrl.trim().length() == 0) {
-            return resolveRegistry(targetUrl);
-        }
-        try {
-            String script = pacScriptLoader.load(pacUrl);
-            return pacEvaluator.evaluate(script, targetUrl);
-        } catch (ProxyResolutionException e) {
-            return resolveRegistry(targetUrl);
-        }
-    }
-
-    private static PacUrlResolver createPacUrlResolver(ProxyConfiguration configuration) {
-        ProxyConfiguration effectiveConfiguration = configuration == null ? ProxyConfiguration.defaults() : configuration;
-        if (effectiveConfiguration.getPacUrlDiscoveryScript() != null
-                && effectiveConfiguration.getPacUrlDiscoveryScript().trim().length() > 0) {
-            return new PowerShellPacUrlResolver(effectiveConfiguration.getPacUrlDiscoveryScript());
-        }
-        return new WindowsPacUrlResolver();
+        return targetUrl;
     }
 }

@@ -15,7 +15,7 @@ public final class ProxyConfiguration {
     private final boolean debugEnabled;
 
     private ProxyConfiguration(Builder builder) {
-        this.mode = builder.mode == null ? ProxyMode.PAC_URL : builder.mode;
+        this.mode = builder.mode == null ? ProxyMode.PAC_URL_POWERSHELL : builder.mode;
         this.testUrl = defaultIfBlank(builder.testUrl, ProxyDefaults.DEFAULT_TEST_URL);
         this.pacUrl = trimToNull(builder.pacUrl);
         this.pacUrlDiscoveryScript = defaultIfBlank(builder.pacUrlDiscoveryScript,

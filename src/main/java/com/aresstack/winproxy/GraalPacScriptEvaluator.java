@@ -11,9 +11,9 @@ import java.net.URL;
  */
 public final class GraalPacScriptEvaluator implements PacEvaluator {
 
-    private final ProxyResultParser proxyResultParser;
+    private final PacProxyRouteParser proxyResultParser;
 
-    public GraalPacScriptEvaluator(ProxyResultParser proxyResultParser) {
+    public GraalPacScriptEvaluator(PacProxyRouteParser proxyResultParser) {
         this.proxyResultParser = proxyResultParser;
     }
 
@@ -44,11 +44,6 @@ public final class GraalPacScriptEvaluator implements PacEvaluator {
                 context.close();
             }
         }
-    }
-
-    public ProxyResult evaluateFromPacUrl(String pacUrl, String targetUrl) {
-        String pacScript = new UrlConnectionPacScriptLoader().load(pacUrl);
-        return evaluate(pacScript, targetUrl);
     }
 
     private static String extractHost(String targetUrl) {

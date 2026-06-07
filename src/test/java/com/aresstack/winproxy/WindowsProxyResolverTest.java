@@ -10,10 +10,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class WindowsProxyResolverTest {
 
     @Test
-    void defaultsToPacUrlMode() {
+    void defaultsToPowerShellPacMode() {
         ProxyConfiguration configuration = ProxyConfiguration.defaults();
 
-        assertEquals(ProxyMode.PAC_URL, configuration.getMode());
+        assertEquals(ProxyMode.PAC_URL_POWERSHELL, configuration.getMode());
         assertEquals(ProxyDefaults.DEFAULT_TEST_URL, configuration.getTestUrl());
         assertEquals(ProxyDefaults.DEFAULT_PAC_URL_DISCOVERY_SCRIPT, configuration.getPacUrlDiscoveryScript());
         assertEquals(ProxyDefaults.DEFAULT_WINDOWS_PAC_SCRIPT, configuration.getWindowsPacScript());
@@ -53,50 +53,52 @@ class WindowsProxyResolverTest {
         );
     }
 
+    // ── route parser ──
+
     @Test
     void parsesPacProxyResult() {
-        ProxyResult result = new ProxyResultParser().parse("PROXY proxy.example.com:8080; DIRECT");
+        ProxyResult result = new PacProxyRouteParser().parse("PROXY proxy.example.com:8080; DIRECT");
 
-        assertFalse(result.isDirect());
+        assertTrue(result.isProxy());
         assertEquals("proxy.example.com", result.getHost());
         assertEquals(8080, result.getPort());
     }
 
     @Test
     void parsesDirectPacProxyResult() {
-        ProxyResult result = new ProxyResultParser().parse("DIRECT");
+        ProxyResult result = new PacProxyRouteParser().parse("DIRECT");
 
         assertTrue(result.isDirect());
     }
 
     @Test
     void ignoresUnsupportedSocksResult() {
-        ProxyResult result = new ProxyResultParser().parse("SOCKS proxy.example.com:1080");
+        ProxyResult result = new PacProxyRouteParser().parse("SOCKS proxy.example.com:1080");
 
         assertTrue(result.isDirect());
     }
 
     @Test
     void parsesHostPortResult() {
-        ProxyResult result = new ProxyResultParser().parse("proxy.example.com:8080");
+        ProxyResult result = new PacProxyRouteParser().parse("proxy.example.com:8080");
 
-        assertFalse(result.isDirect());
+        assertTrue(result.isProxy());
         assertEquals("proxy.example.com", result.getHost());
         assertEquals(8080, result.getPort());
     }
 
     @Test
     void rejectsInvalidProxyPorts() {
-        assertTrue(new ProxyResultParser().parse("proxy.example.com:0").isDirect());
-        assertTrue(new ProxyResultParser().parse("proxy.example.com:65536").isDirect());
-        assertTrue(new ProxyResultParser().parse("proxy.example.com:not-a-port").isDirect());
+        assertTrue(new PacProxyRouteParser().parse("proxy.example.com:0").isDirect());
+        assertTrue(new PacProxyRouteParser().parse("proxy.example.com:65536").isDirect());
+        assertTrue(new PacProxyRouteParser().parse("proxy.example.com:not-a-port").isDirect());
     }
 
     @Test
     void fallsBackToHttpProxyForProtocolMap() {
         ProxyResult result = new ProxyServerParser().parse("http=proxy.example.com:8080", "https://example.com");
 
-        assertFalse(result.isDirect());
+        assertTrue(result.isProxy());
         assertEquals("proxy.example.com", result.getHost());
         assertEquals(8080, result.getPort());
     }
@@ -105,7 +107,7 @@ class WindowsProxyResolverTest {
     void selectsSchemeSpecificProxyForProtocolMap() {
         ProxyResult result = new ProxyServerParser().parse("http=http.example.com:8080;https=https.example.com:8443", "https://example.com");
 
-        assertFalse(result.isDirect());
+        assertTrue(result.isProxy());
         assertEquals("https.example.com", result.getHost());
         assertEquals(8443, result.getPort());
     }
@@ -121,26 +123,12 @@ class WindowsProxyResolverTest {
         assertFalse(new ProxyBypassMatcher().isBypassed("not a url", "*.local"));
     }
 
-    @Test
-    void resolvesManualProxy() {
-        ProxyConfiguration configuration = ProxyConfiguration.builder()
-                .mode(ProxyMode.MANUAL)
-                .manualProxyHost("proxy.example.com")
-                .manualProxyPort(8080)
-                .build();
-
-        ProxyResult result = new WindowsProxyResolver(configuration).resolve("https://plugins.gradle.org/m2/");
-
-        assertEquals("proxy.example.com", result.getHost());
-        assertEquals(8080, result.getPort());
-    }
+    // ── modes ──
 
     @Test
-    void rejectsInvalidManualProxyPort() {
+    void disabledModeReturnsDirect() {
         ProxyConfiguration configuration = ProxyConfiguration.builder()
-                .mode(ProxyMode.MANUAL)
-                .manualProxyHost("proxy.example.com")
-                .manualProxyPort(70000)
+                .mode(ProxyMode.DISABLED)
                 .build();
 
         ProxyResult result = new WindowsProxyResolver(configuration).resolve("https://plugins.gradle.org/m2/");
@@ -149,23 +137,64 @@ class WindowsProxyResolverTest {
     }
 
     @Test
-    void discoversConfiguredPacUrl() {
+    void resolvesManualProxy() {
         ProxyConfiguration configuration = ProxyConfiguration.builder()
-                .pacUrl("http://proxy.example.com/wpad.dat")
+                .mode(ProxyMode.MANUAL_PROXY)
+                .manualProxyHost("proxy.example.com")
+                .manualProxyPort(8080)
                 .build();
 
-        PacUrlResolution resolution = new WindowsProxyResolver(configuration).discoverPacUrl();
+        ProxyResult result = new WindowsProxyResolver(configuration).resolve("https://plugins.gradle.org/m2/");
 
-        assertTrue(resolution.isPresent());
-        assertEquals("http://proxy.example.com/wpad.dat", resolution.getPacUrl());
+        assertTrue(result.isProxy());
+        assertEquals("proxy.example.com", result.getHost());
+        assertEquals(8080, result.getPort());
     }
 
     @Test
-    void returnsNullWhenPowerShellPacUrlDiscoveryFails() {
-        String pacUrl = new WindowsProxyResolver().discoverPacUrlWithPowerShell("exit 1");
+    void rejectsInvalidManualProxyPort() {
+        ProxyConfiguration configuration = ProxyConfiguration.builder()
+                .mode(ProxyMode.MANUAL_PROXY)
+                .manualProxyHost("proxy.example.com")
+                .manualProxyPort(70000)
+                .build();
 
-        assertEquals(null, pacUrl);
+        ProxyResult result = new WindowsProxyResolver(configuration).resolve("https://plugins.gradle.org/m2/");
+
+        assertTrue(result.isError());
+        assertFalse(result.isDirect());
+        assertEquals("invalid-manual-proxy", result.getReason());
     }
+
+    @Test
+    void pacUrlManualWithoutConfiguredUrlReturnsError() {
+        ProxyConfiguration configuration = ProxyConfiguration.builder()
+                .mode(ProxyMode.PAC_URL_MANUAL)
+                .build();
+
+        ProxyResult result = new WindowsProxyResolver(configuration).resolve("https://plugins.gradle.org/m2/");
+
+        assertTrue(result.isError());
+        assertFalse(result.isDirect());
+        assertEquals("pac-url-not-found", result.getReason());
+    }
+
+    @Test
+    void reservedNativeModesReturnNotImplemented() {
+        ProxyResult settings = new WindowsProxyResolver(ProxyConfiguration.builder()
+                .mode(ProxyMode.WINDOWS_NATIVE_PROXY_SETTINGS).build())
+                .resolve("https://plugins.gradle.org/m2/");
+        ProxyResult route = new WindowsProxyResolver(ProxyConfiguration.builder()
+                .mode(ProxyMode.WINDOWS_NATIVE_ROUTE_RESOLVER).build())
+                .resolve("https://plugins.gradle.org/m2/");
+
+        assertTrue(settings.isNotImplemented());
+        assertFalse(settings.isDirect());
+        assertTrue(route.isNotImplemented());
+        assertFalse(route.isDirect());
+    }
+
+    // ── PAC evaluation ──
 
     @Test
     void evaluatesSimplePacScript() {
@@ -174,6 +203,7 @@ class WindowsProxyResolverTest {
                 "https://plugins.gradle.org/m2/"
         );
 
+        assertTrue(result.isProxy());
         assertEquals("proxy.example.com", result.getHost());
         assertEquals(8080, result.getPort());
     }

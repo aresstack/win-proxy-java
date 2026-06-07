@@ -14,7 +14,7 @@ public final class PowerShellPacUrlResolver implements PacUrlResolver {
     }
 
     public PacUrlResolution resolve() {
-        ScriptExecutionResult result = new ScriptRunner(script).runWithArguments();
+        ScriptExecutionResult result = new ScriptRunner(script).runInlineCommand();
         if (result.getExitCode() != 0) {
             throw new ProxyResolutionException("PowerShell PAC URL discovery failed with exit code " + result.getExitCode() + ".");
         }

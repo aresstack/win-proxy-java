@@ -62,6 +62,67 @@ final class ScriptRunner {
         }
     }
 
+    /**
+     * Executes the script <em>inline</em> via {@code powershell.exe -Command} —
+     * no temporary {@code .ps1} file is written.
+     * <p>
+     * This is required on hardened machines where an unsigned {@code .ps1} from
+     * {@code %TEMP%} would be blocked by GPO execution policy or AppLocker, while
+     * an inline {@code -Command} is still allowed. {@code stderr} is drained on a
+     * daemon thread and discarded so it cannot corrupt the parsed output.
+     */
+    ScriptExecutionResult runInlineCommand() {
+        Process process = null;
+        ExecutorService outputExecutor = Executors.newSingleThreadExecutor();
+        try {
+            List<String> command = new ArrayList<String>();
+            command.add("powershell.exe");
+            command.add("-NoProfile");
+            command.add("-ExecutionPolicy");
+            command.add("Bypass");
+            command.add("-Command");
+            command.add(script);
+
+            process = new ProcessBuilder(command).start();
+            final Process startedProcess = process;
+            Thread stderrDrainer = new Thread(new Runnable() {
+                public void run() {
+                    BufferedReader reader = null;
+                    try {
+                        reader = new BufferedReader(new InputStreamReader(startedProcess.getErrorStream(), StandardCharsets.UTF_8));
+                        while (reader.readLine() != null) {
+                            // discard
+                        }
+                    } catch (Exception ignored) {
+                        // ignore
+                    } finally {
+                        if (reader != null) {
+                            try {
+                                reader.close();
+                            } catch (IOException ignored) {
+                                // ignore
+                            }
+                        }
+                    }
+                }
+            }, "win-proxy-java-stderr-drain");
+            stderrDrainer.setDaemon(true);
+            stderrDrainer.start();
+
+            Future<String> outputFuture = outputExecutor.submit(new OutputReader(process));
+            int exitCode = waitFor(process);
+            String output = readOutput(outputFuture);
+            return new ScriptExecutionResult(exitCode, output.trim());
+        } catch (IOException e) {
+            throw new ProxyResolutionException("Could not run PowerShell command.", e);
+        } finally {
+            outputExecutor.shutdownNow();
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+            }
+        }
+    }
+
     private List<String> createCommand(File file, String[] arguments) {
         List<String> command = new ArrayList<String>();
         command.add("powershell.exe");

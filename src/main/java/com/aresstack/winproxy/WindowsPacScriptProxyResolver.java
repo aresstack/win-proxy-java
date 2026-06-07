@@ -1,11 +1,16 @@
 package com.aresstack.winproxy;
 
 /**
- * Resolves the final proxy by delegating to a Windows PowerShell/.NET script.
+ * Resolves the final proxy by delegating to a Windows PowerShell/.NET script
+ * ({@code GetSystemWebProxy()}). Legacy route resolver — no GraalVM, no own PAC
+ * evaluation. Backs {@link ProxyMode#POWERSHELL_ROUTE_RESOLVER_LEGACY}.
+ *
+ * @deprecated Use a {@code PAC_URL_*} mode (GraalVM PAC evaluation) instead.
  */
+@Deprecated
 public final class WindowsPacScriptProxyResolver {
 
-    private final ProxyResultParser parser = new ProxyResultParser();
+    private final PacProxyRouteParser parser = new PacProxyRouteParser();
 
     public ProxyResult resolve(ProxyConfiguration configuration, String targetUrl) {
         String resolvedTargetUrl = targetUrl;

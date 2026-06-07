@@ -12,7 +12,7 @@ public final class ProxyServerParser {
             return ProxyResult.direct("empty-proxy-server");
         }
         String selected = selectServer(proxyServer, targetUrl);
-        return new ProxyResultParser().parse(selected);
+        return new PacProxyRouteParser().parse(selected);
     }
 
     private String selectServer(String proxyServer, String targetUrl) {
