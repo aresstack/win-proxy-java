@@ -16,7 +16,13 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Executes PowerShell scripts with a temporary script file.
+ * Executes PowerShell either inline via {@code -Command} for PAC URL discovery
+ * ({@link #runInlineCommand()} / {@link #buildInlineCommand()}) or through a temporary
+ * script file for the deprecated legacy route resolver ({@link #runWithArguments(String...)}).
+ * <p>
+ * The inline {@code -Command} path is the important one on hardened machines: it never writes
+ * a {@code .ps1} file to {@code %TEMP%}, so it keeps working where GPO execution policy or
+ * AppLocker block unsigned script files.
  */
 final class ScriptRunner {
 

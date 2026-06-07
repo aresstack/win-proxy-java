@@ -13,6 +13,12 @@ version = '0.1.0-beta.4'
 
 test {
     useJUnitPlatform()
+    // Forward the diagnostics opt-in to the forked test JVM so the manual,
+    // environment-touching PacPipelineDiagnosticTest can be enabled explicitly:
+    //   ./gradlew test -Dwinproxy.diagnostics=true
+    if (System.getProperty('winproxy.diagnostics') != null) {
+        systemProperty 'winproxy.diagnostics', System.getProperty('winproxy.diagnostics')
+    }
     testLogging {
         showStandardStreams = true
         events 'passed', 'failed', 'skipped'

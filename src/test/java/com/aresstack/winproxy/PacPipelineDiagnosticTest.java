@@ -1,6 +1,7 @@
 package com.aresstack.winproxy;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 /**
  * Manual, network-touching diagnostic that exercises the real PAC pipeline against
@@ -9,7 +10,13 @@ import org.junit.jupiter.api.Test;
  * <p>It never fails the build (no hard assertions on network/registry state) — it
  * prints a report so you can see EXACTLY what each mode returns and, on failure,
  * the technical reason instead of a masked DIRECT.
+ *
+ * <p><b>Not a normal CI test.</b> It touches the real environment (registry,
+ * {@code powershell.exe}, network) and has no assertions, so it is disabled by default.
+ * Enable it explicitly with the system property:
+ * <pre>{@code ./gradlew test -Dwinproxy.diagnostics=true}</pre>
  */
+@EnabledIfSystemProperty(named = "winproxy.diagnostics", matches = "true")
 class PacPipelineDiagnosticTest {
 
     private static final String TARGET_URL = "https://plugins.gradle.org/m2/";

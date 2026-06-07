@@ -8,9 +8,12 @@ corporate workstation environments. It is designed for tools that must run behin
 Windows proxy infrastructure without forcing every application to duplicate PowerShell,
 registry, WPAD, and PAC handling.
 
-The default resolution mode is **PAC_URL**. This mirrors the most common managed Windows
-setup: Windows stores the address of a PAC/WPAD file, the application downloads that file,
-and the Java library evaluates `FindProxyForURL(url, host)` locally.
+The default resolution mode is **PAC_URL_POWERSHELL**. This mirrors the most common managed
+Windows setup: Windows stores the address of a PAC/WPAD file, the library discovers that
+address (by default via an inline PowerShell `-Command` one-liner), downloads the file, and
+evaluates `FindProxyForURL(url, host)` locally. `PAC_URL_WINDOWS_SETTINGS` is the explicit
+alternative that discovers the same PAC URL through `reg.exe`/Windows settings without ever
+starting PowerShell.
 
 ## Installation
 
@@ -67,22 +70,24 @@ This keeps Windows integration, IO, and JavaScript evaluation separated and test
 
 ### Stage 1: Resolve the PAC URL from Windows
 
-The default resolver first looks for the Windows PAC URL. The most important Windows value
-is the same one commonly checked with PowerShell:
+Stage 1 discovers the Windows PAC URL. The default mode `PAC_URL_POWERSHELL` reads the same
+value commonly checked with PowerShell, inline via `powershell.exe -Command` (never a
+temporary `.ps1`):
 
 ```powershell
 (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings').AutoConfigURL
 ```
 
-The Java implementation prefers direct Windows registry access through the library's
-Windows registry adapter. This avoids making the main path dependent on PowerShell.
-
-The built-in resolver checks:
+The explicit alternative `PAC_URL_WINDOWS_SETTINGS` performs the same discovery through
+`reg.exe`/Windows settings without starting PowerShell. It checks:
 
 1. `AutoConfigURL` from user and policy hives,
 2. binary connection settings that can contain auto-config metadata,
 3. WPAD auto-detection flags,
 4. `http://wpad/wpad.dat` as the conventional WPAD endpoint when auto-detection is enabled.
+
+`PAC_URL_MANUAL` skips discovery entirely and uses only the PAC URL configured by the caller.
+Whichever discovery strategy is selected, stages 2 and 3 are identical.
 
 ### Stage 2: Load the PAC/WPAD script
 
@@ -99,7 +104,7 @@ The PAC content is evaluated by `GraalPacScriptEvaluator`. It calls:
 FindProxyForURL(url, host)
 ```
 
-The result is parsed into a `ProxyResult`.
+The result is parsed into a `ProxyResult` by `PacProxyRouteParser`.
 
 Supported PAC result forms include:
 
@@ -109,9 +114,12 @@ PROXY proxy.example.com:8080
 HTTPS proxy.example.com:8443
 ```
 
-`SOCKS` entries are currently ignored because `ProxyResult` intentionally models HTTP-style
-Java proxies only. The first supported non-direct proxy entry is returned. `DIRECT` produces
-an empty proxy result.
+The route string is a `;`-separated preference list evaluated left to right; the first usable
+entry wins. Unsupported entries (e.g. `SOCKS`) and malformed `host:port` values return an
+`ERROR` `ProxyResult` (`unsupported-pac-entry`, `invalid-proxy-port`, `invalid-proxy-address`)
+**unless** the PAC result contains an explicit `DIRECT` fallback later in the route list. In
+other words, `DIRECT` is only returned when the PAC itself explicitly says `DIRECT` — it is
+never silently synthesized from an unsupported or malformed entry.
 
 ## Quick start
 
@@ -302,7 +310,9 @@ if (proxy.isProxy()) {
 
 - PAC evaluation depends on the PAC helper functions currently provided by the evaluator.
   Complex enterprise PAC files may require additional helper functions.
-- SOCKS PAC entries are ignored until `ProxyResult` carries proxy type information.
+- Unsupported PAC entries (e.g. `SOCKS`) and malformed `host:port` values return `ERROR`
+  unless the PAC result contains an explicit `DIRECT` fallback later in the route list;
+  `ProxyResult` intentionally models HTTP-style Java proxies only.
 - `POWERSHELL_ROUTE_RESOLVER_LEGACY` is deprecated and depends on PowerShell availability and local execution policy.
 - Registry-based PAC URL discovery is Windows-specific.
 - Maven Central versions are immutable. Publish fixes with a new version.

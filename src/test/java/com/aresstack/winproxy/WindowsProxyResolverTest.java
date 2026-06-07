@@ -72,10 +72,21 @@ class WindowsProxyResolverTest {
     }
 
     @Test
-    void ignoresUnsupportedSocksResult() {
+    void rejectsUnsupportedSocksResult() {
         ProxyResult result = new PacProxyRouteParser().parse("SOCKS proxy.example.com:1080");
 
-        assertTrue(result.isDirect());
+        assertTrue(result.isError(), "SOCKS-only result must be ERROR, never a masked DIRECT");
+        assertFalse(result.isDirect());
+        assertEquals("unsupported-pac-entry", result.getReason());
+    }
+
+    @Test
+    void explicitDirectFallbackAfterUnsupportedEntryWins() {
+        // DIRECT may only come from an explicit PAC DIRECT, never from a parser fallback.
+        ProxyResult result = new PacProxyRouteParser().parse("SOCKS proxy.example.com:1080; DIRECT");
+
+        assertTrue(result.isDirect(), "explicit trailing DIRECT must win over an earlier unsupported entry");
+        assertEquals("pac-direct", result.getReason());
     }
 
     @Test
@@ -89,9 +100,38 @@ class WindowsProxyResolverTest {
 
     @Test
     void rejectsInvalidProxyPorts() {
-        assertTrue(new PacProxyRouteParser().parse("proxy.example.com:0").isDirect());
-        assertTrue(new PacProxyRouteParser().parse("proxy.example.com:65536").isDirect());
-        assertTrue(new PacProxyRouteParser().parse("proxy.example.com:not-a-port").isDirect());
+        ProxyResult zero = new PacProxyRouteParser().parse("proxy.example.com:0");
+        ProxyResult tooLarge = new PacProxyRouteParser().parse("proxy.example.com:65536");
+        ProxyResult notANumber = new PacProxyRouteParser().parse("proxy.example.com:not-a-port");
+
+        assertTrue(zero.isError());
+        assertFalse(zero.isDirect());
+        assertEquals("invalid-proxy-port", zero.getReason());
+
+        assertTrue(tooLarge.isError());
+        assertFalse(tooLarge.isDirect());
+        assertEquals("invalid-proxy-port", tooLarge.getReason());
+
+        assertTrue(notANumber.isError());
+        assertFalse(notANumber.isDirect());
+        assertEquals("invalid-proxy-port", notANumber.getReason());
+    }
+
+    @Test
+    void rejectsInvalidProxyPortInPrefixedEntry() {
+        ProxyResult result = new PacProxyRouteParser().parse("PROXY proxy.example.com:not-a-port");
+
+        assertTrue(result.isError());
+        assertFalse(result.isDirect());
+        assertEquals("invalid-proxy-port", result.getReason());
+    }
+
+    @Test
+    void rejectsEmptyPacResult() {
+        assertTrue(new PacProxyRouteParser().parse("").isError());
+        assertTrue(new PacProxyRouteParser().parse(null).isError());
+        assertEquals("empty-pac-result", new PacProxyRouteParser().parse("").getReason());
+        assertFalse(new PacProxyRouteParser().parse("").isDirect());
     }
 
     @Test

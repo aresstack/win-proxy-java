@@ -30,7 +30,15 @@ public final class WindowsPacScriptProxyResolver {
         if (result.getExitCode() != 0) {
             throw new ProxyResolutionException("Windows PAC script failed with exit code " + result.getExitCode() + ".");
         }
-        return parser.parse(result.getOutput());
+        // Legacy contract: the PowerShell/.NET route script prints EMPTY output for a DIRECT
+        // route. That must be handled here, separately from PacProxyRouteParser, because the
+        // shared parser now (correctly) treats empty input as ERROR empty-pac-result. Without
+        // this guard MainframeMate's legacy path would break on every DIRECT route.
+        String output = result.getOutput();
+        if (output == null || output.trim().length() == 0) {
+            return ProxyResult.direct("legacy-route-direct");
+        }
+        return parser.parse(output);
     }
 
     private String quotePowerShellArgument(String value) {
