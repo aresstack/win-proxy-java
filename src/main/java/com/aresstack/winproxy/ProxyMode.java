@@ -3,6 +3,11 @@ package com.aresstack.winproxy;
 /**
  * Selects the proxy resolution strategy.
  * <p>
+ * <b>Central axis:</b> {@code PAC_URL_*} modes only differ in how the PAC URL is
+ * discovered. All {@code PAC_URL_*} modes then download the PAC file and evaluate
+ * {@code FindProxyForURL} through the JavaScript (GraalVM) PAC evaluator. The
+ * discovery step never determines the final route by itself.
+ * <p>
  * The modes are cut along clear functional lines. In particular, the way the
  * <em>PAC URL</em> is discovered (PowerShell vs. Windows settings vs. manual)
  * is an explicit choice and is never silently mixed with static-proxy or
@@ -45,10 +50,14 @@ public enum ProxyMode {
     /**
      * Uses a PAC URL that the user configured explicitly, downloads the PAC
      * file and evaluates {@code FindProxyForURL} via GraalVM/JavaScript.
+     * <p>
+     * Pipeline: {@code configured pacUrl -> download -> GraalVM FindProxyForURL
+     * -> parse}. It performs <em>no</em> automatic discovery:
      * <ul>
      *   <li>No PowerShell.</li>
-     *   <li>No registry fallback.</li>
-     *   <li>No static-proxy fallback.</li>
+     *   <li>No {@link WindowsPacUrlResolver} (no {@code reg.exe}/registry).</li>
+     *   <li>No {@link StaticProxySettingsResolver}.</li>
+     *   <li>No static-proxy or DIRECT fallback — a missing/blank PAC URL is an ERROR.</li>
      * </ul>
      */
     PAC_URL_MANUAL,

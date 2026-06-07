@@ -75,15 +75,7 @@ final class ScriptRunner {
         Process process = null;
         ExecutorService outputExecutor = Executors.newSingleThreadExecutor();
         try {
-            List<String> command = new ArrayList<String>();
-            command.add("powershell.exe");
-            command.add("-NoProfile");
-            command.add("-ExecutionPolicy");
-            command.add("Bypass");
-            command.add("-Command");
-            command.add(script);
-
-            process = new ProcessBuilder(command).start();
+            process = new ProcessBuilder(buildInlineCommand()).start();
             final Process startedProcess = process;
             Thread stderrDrainer = new Thread(new Runnable() {
                 public void run() {
@@ -121,6 +113,27 @@ final class ScriptRunner {
                 process.destroyForcibly();
             }
         }
+    }
+
+    /**
+     * Builds the exact command line used by {@link #runInlineCommand()}:
+     * {@code powershell.exe -NoProfile -ExecutionPolicy Bypass -Command <script>}.
+     * <p>
+     * It deliberately uses {@code -Command} (inline) and never {@code -File}, so no
+     * temporary {@code .ps1} is written to {@code %TEMP%}. Writing a temp script was
+     * the hardening bug: an unsigned {@code .ps1} from {@code %TEMP%} is blocked by
+     * GPO execution policy / AppLocker, while an inline {@code -Command} is allowed.
+     * Package-private so it can be asserted in a unit test without spawning a process.
+     */
+    List<String> buildInlineCommand() {
+        List<String> command = new ArrayList<String>();
+        command.add("powershell.exe");
+        command.add("-NoProfile");
+        command.add("-ExecutionPolicy");
+        command.add("Bypass");
+        command.add("-Command");
+        command.add(script);
+        return command;
     }
 
     private List<String> createCommand(File file, String[] arguments) {

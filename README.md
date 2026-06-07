@@ -18,14 +18,14 @@ and the Java library evaluates `FindProxyForURL(url, host)` locally.
 <dependency>
   <groupId>com.aresstack</groupId>
   <artifactId>win-proxy-java</artifactId>
-  <version>0.1.0-beta.2</version>
+  <version>0.1.0-beta.4</version>
 </dependency>
 ```
 
 Gradle:
 
 ```groovy
-implementation 'com.aresstack:win-proxy-java:0.1.0-beta.2'
+implementation 'com.aresstack:win-proxy-java:0.1.0-beta.4'
 ```
 
 ## Why this library exists
@@ -215,6 +215,47 @@ ProxyResult proxy = new WindowsProxyResolver(configuration)
         .resolve("https://repo.maven.apache.org/maven2/");
 ```
 
+## Default mode spawns PowerShell
+
+`ProxyConfiguration.defaults()` deliberately selects `PAC_URL_POWERSHELL`, because that
+mirrors the proven user path on managed, hardened Windows machines. As a consequence,
+`new WindowsProxyResolver().resolve(url)` (or any resolver built from `defaults()`)
+**will spawn `powershell.exe`** for the PAC-URL discovery step — PowerShell only delivers
+the PAC URL, never the final route. Callers that must not start PowerShell should select an
+explicit mode (`DISABLED`, `PAC_URL_WINDOWS_SETTINGS`, `PAC_URL_MANUAL`, …) via
+`ProxyConfiguration.builder().mode(...)`.
+
+## Sentinel test (proving the PAC pipeline really ran)
+
+To verify end-to-end that a real PAC file was downloaded and evaluated — and that the
+result is not a silently masked `DIRECT` — use a PAC file that returns a clearly bogus,
+reserved-range sentinel proxy for a well-known URL. For `plugins.gradle.org` the test PAC
+intentionally returns:
+
+```text
+PROXY 192.0.2.123:18080
+```
+
+`192.0.2.0/24` is the [RFC 5737](https://datatracker.ietf.org/doc/html/rfc5737)
+documentation range and is never routable, so the value can only come from the PAC file.
+
+```java
+ProxyConfiguration configuration = ProxyConfiguration.builder()
+        .mode(ProxyMode.PAC_URL_MANUAL)
+        .pacUrl("file:///C:/path/to/sentinel.pac") // serves the PAC above
+        .build();
+
+ProxyResult proxy = new WindowsProxyResolver(configuration)
+        .resolve("https://plugins.gradle.org/m2/");
+
+// Expected: PROXY 192.0.2.123:18080
+// If this comes back DIRECT, the PAC pipeline was NOT used correctly.
+assert proxy.isProxy() && "192.0.2.123".equals(proxy.getHost()) && proxy.getPort() == 18080;
+```
+
+If `plugins.gradle.org` resolves to `DIRECT` while the sentinel PAC is configured, the PAC
+file was not loaded/evaluated — that is exactly the regression this sentinel guards against.
+
 
 ## Apply the result to JVM system properties
 
@@ -265,6 +306,11 @@ if (proxy.isProxy()) {
 - `POWERSHELL_ROUTE_RESOLVER_LEGACY` is deprecated and depends on PowerShell availability and local execution policy.
 - Registry-based PAC URL discovery is Windows-specific.
 - Maven Central versions are immutable. Publish fixes with a new version.
+- Consumers should depend on a published coordinate (e.g.
+  `com.aresstack:win-proxy-java:0.1.0-beta.4`). `mavenLocal()` is only acceptable as a
+  temporary local-test path and must be removed before a downstream merge/release. If a
+  required version is not yet published remotely, treat publishing it as an explicit release
+  step (TODO) rather than relying on `mavenLocal()`.
 
 ## License
 

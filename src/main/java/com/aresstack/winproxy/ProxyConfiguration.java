@@ -28,8 +28,20 @@ public final class ProxyConfiguration {
 
     /**
      * Create default configuration.
+     * <p>
+     * <b>Important — the default mode is {@link ProxyMode#PAC_URL_POWERSHELL}.</b>
+     * This is a deliberate choice: it mirrors the proven user path on managed,
+     * hardened Windows machines, where the PAC URL ({@code AutoConfigURL}) is
+     * discovered by an inline {@code powershell.exe -Command} one-liner. As a
+     * consequence, calling {@link WindowsProxyResolver#resolve(String)} on the
+     * default configuration <em>will spawn {@code powershell.exe}</em> for the
+     * discovery step (PowerShell only delivers the PAC URL, never the final
+     * route). Callers that must not start PowerShell should select an explicit
+     * mode such as {@link ProxyMode#DISABLED},
+     * {@link ProxyMode#PAC_URL_WINDOWS_SETTINGS} or {@link ProxyMode#PAC_URL_MANUAL}
+     * via {@link Builder#mode(ProxyMode)}.
      *
-     * @return default configuration
+     * @return default configuration ({@link ProxyMode#PAC_URL_POWERSHELL})
      */
     public static ProxyConfiguration defaults() {
         return builder().build();
