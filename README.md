@@ -335,6 +335,79 @@ There are two equivalent build paths:
   ./gradlew test -Dwinproxy.diagnostics=true
   ```
 
+## Known issues
+
+### `pac-evaluation-failed` in a fat/uber/shadow jar: "No language for id regex found"
+
+**Symptom.** On a normal classpath everything works, but once the consuming application
+is bundled into a single fat/uber/shadow jar, every PAC evaluation returns
+`ERROR pac-evaluation-failed`. With the underlying cause exposed it reads:
+
+```
+org.graalvm.polyglot.PolyglotException: SyntaxError: No language for id regex found.
+Supported languages are: [js]
+```
+
+**Cause.** GraalJS does not implement JavaScript regular expressions itself — it delegates
+them to a **separate internal Truffle language `regex` (TRegex)** shipped in its own
+`org.graalvm.regex` jar. Each GraalVM language jar registers itself via a ServiceLoader file:
+
+```
+META-INF/services/com.oracle.truffle.api.TruffleLanguage$Provider
+```
+
+The `js` jar and the `regex` jar each contain their **own copy** of that file (one listing
+`com.oracle.truffle.js.lang.JavaScriptLanguageProvider`, the other
+`com.oracle.truffle.regex.RegexLanguageProvider`). When several jars are merged into one
+fat jar, these same-path files collide and a naive bundler keeps only **one** of them —
+usually the `js` one. The `regex` language is then never registered, so any PAC script that
+uses a regular expression (directly, or via helpers like `shExpMatch`, `isInNet`,
+`dnsResolve`) fails. PAC scripts that only return a constant (e.g. plain `DIRECT`) appear to
+work, which makes this easy to miss.
+
+This is **not** a bug in `win-proxy-java` — it is a packaging concern in the application that
+bundles GraalJS. It only appears in fat-jar builds; the unit tests and a normal classpath are
+unaffected.
+
+**Fix.** Merge the service-provider files when building the fat jar so **both** the `js` and
+`regex` providers survive:
+
+- **Gradle — johnrengelman Shadow** (e.g. `7.x`/`8.x`): `mergeServiceFiles()` is enough:
+  ```groovy
+  shadowJar {
+      mergeServiceFiles()
+  }
+  ```
+- **Gradle — gradleup Shadow `9.x`**: `mergeServiceFiles()` currently does **not** merge this
+  particular provider file. Ship an explicit, correctly-merged provider file as a resource of
+  the application module and let `mergeServiceFiles()` fold the dependency copies into it:
+  ```text
+  // src/main/resources/META-INF/services/com.oracle.truffle.api.TruffleLanguage$Provider
+  com.oracle.truffle.js.lang.JavaScriptLanguageProvider
+  com.oracle.truffle.regex.RegexLanguageProvider
+  ```
+  ```groovy
+  shadowJar {
+      mergeServiceFiles()
+  }
+  ```
+- **Maven Shade Plugin**: add the `ServicesResourceTransformer`:
+  ```xml
+  <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+  ```
+
+**Verify** the bundled jar afterwards — the merged file must list both providers:
+
+```bash
+unzip -p app-all.jar 'META-INF/services/com.oracle.truffle.api.TruffleLanguage$Provider'
+# expected:
+#   com.oracle.truffle.js.lang.JavaScriptLanguageProvider
+#   com.oracle.truffle.regex.RegexLanguageProvider
+```
+
+A quick end-to-end check is to evaluate a PAC that uses a regex helper (e.g. `shExpMatch`)
+and confirm it no longer returns `pac-evaluation-failed`.
+
 ## Limitations
 
 - PAC evaluation depends on the PAC helper functions currently provided by the evaluator.
