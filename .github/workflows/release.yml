@@ -4,12 +4,13 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Check out sources
@@ -34,3 +35,15 @@ jobs:
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
 
+      # Manual runs (workflow_dispatch) deploy the version from pom.xml and then create the
+      # matching v<version> tag themselves. A tag pushed with GITHUB_TOKEN does not trigger
+      # this workflow again, so the artifact is deployed exactly once.
+      - name: Tag the released version
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          version=$(sed -n 's/^    <version>\(.*\)<\/version>/\1/p' pom.xml | head -1)
+          test -n "$version"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${version}" -m "Release v${version}"
+          git push origin "v${version}"
