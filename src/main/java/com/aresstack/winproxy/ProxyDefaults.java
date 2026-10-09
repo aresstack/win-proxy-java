@@ -15,6 +15,52 @@ public final class ProxyDefaults {
             "(Get-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings').AutoConfigURL";
 
     /**
+     * Default VBScript for {@link ProxyMode#PAC_URL_WSCRIPT}: probes {@code AutoConfigURL} in the
+     * same hives and in the same order as the {@code reg.exe} based discovery (Group Policy keys
+     * first, because GPO always overrides user-level settings), prints the first non-empty value
+     * and exits with code 0. No output (and exit code 0) means that no PAC URL is configured.
+     *
+     * @since 0.2.0
+     */
+    public static final String DEFAULT_PAC_URL_DISCOVERY_WSCRIPT =
+            "Option Explicit\r\n" +
+            "Dim shell, keys, i, value\r\n" +
+            "Set shell = CreateObject(\"WScript.Shell\")\r\n" +
+            "keys = Array( _\r\n" +
+            "    \"HKCU\\Software\\Policies\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\\AutoConfigURL\", _\r\n" +
+            "    \"HKLM\\Software\\Policies\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\\AutoConfigURL\", _\r\n" +
+            "    \"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\\AutoConfigURL\", _\r\n" +
+            "    \"HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\\AutoConfigURL\")\r\n" +
+            "For i = 0 To UBound(keys)\r\n" +
+            "    On Error Resume Next\r\n" +
+            "    Err.Clear\r\n" +
+            "    value = shell.RegRead(keys(i))\r\n" +
+            "    If Err.Number = 0 Then\r\n" +
+            "        On Error GoTo 0\r\n" +
+            "        If Len(Trim(CStr(value))) > 0 Then\r\n" +
+            "            WScript.Echo Trim(CStr(value))\r\n" +
+            "            WScript.Quit 0\r\n" +
+            "        End If\r\n" +
+            "    End If\r\n" +
+            "    On Error GoTo 0\r\n" +
+            "Next\r\n" +
+            "WScript.Quit 0\r\n";
+
+    /**
+     * Returns the default PAC URL discovery script for a mode: VBScript for
+     * {@link ProxyMode#PAC_URL_WSCRIPT}, the PowerShell one-liner for every other mode.
+     *
+     * @param mode proxy mode (may be {@code null})
+     * @return default discovery script, never {@code null}
+     * @since 0.2.0
+     */
+    public static String defaultPacUrlDiscoveryScript(ProxyMode mode) {
+        return mode == ProxyMode.PAC_URL_WSCRIPT
+                ? DEFAULT_PAC_URL_DISCOVERY_WSCRIPT
+                : DEFAULT_PAC_URL_DISCOVERY_SCRIPT;
+    }
+
+    /**
      * Default Windows PAC resolver script. It returns host:port or no output for DIRECT.
      */
     public static final String DEFAULT_WINDOWS_PAC_SCRIPT =

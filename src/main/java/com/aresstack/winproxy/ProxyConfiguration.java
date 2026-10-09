@@ -1,7 +1,17 @@
 package com.aresstack.winproxy;
 
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 /**
  * Immutable configuration for proxy resolution.
+ * <p>
+ * {@link #validate()} / {@link #validationProblems()} check whether the configuration
+ * is complete for its {@link ProxyMode} <em>before</em> any process is spawned or any
+ * network access happens, so UIs can report incomplete settings up front.
  */
 public final class ProxyConfiguration {
 
@@ -19,7 +29,7 @@ public final class ProxyConfiguration {
         this.testUrl = defaultIfBlank(builder.testUrl, ProxyDefaults.DEFAULT_TEST_URL);
         this.pacUrl = trimToNull(builder.pacUrl);
         this.pacUrlDiscoveryScript = defaultIfBlank(builder.pacUrlDiscoveryScript,
-                ProxyDefaults.DEFAULT_PAC_URL_DISCOVERY_SCRIPT);
+                ProxyDefaults.defaultPacUrlDiscoveryScript(this.mode));
         this.windowsPacScript = defaultIfBlank(builder.windowsPacScript, ProxyDefaults.DEFAULT_WINDOWS_PAC_SCRIPT);
         this.manualProxyHost = trimToNull(builder.manualProxyHost);
         this.manualProxyPort = builder.manualProxyPort;
@@ -68,6 +78,14 @@ public final class ProxyConfiguration {
         return pacUrl;
     }
 
+    /**
+     * Returns the PAC URL discovery script. Its language depends on the mode: PowerShell for
+     * {@link ProxyMode#PAC_URL_POWERSHELL} (default {@link ProxyDefaults#DEFAULT_PAC_URL_DISCOVERY_SCRIPT}),
+     * VBScript for {@link ProxyMode#PAC_URL_WSCRIPT} (default
+     * {@link ProxyDefaults#DEFAULT_PAC_URL_DISCOVERY_WSCRIPT}). Other modes ignore it.
+     *
+     * @return the discovery script, never blank
+     */
     public String getPacUrlDiscoveryScript() {
         return pacUrlDiscoveryScript;
     }
@@ -86,6 +104,83 @@ public final class ProxyConfiguration {
 
     public boolean isDebugEnabled() {
         return debugEnabled;
+    }
+
+    /**
+     * Lists everything that makes this configuration unusable for its mode, without
+     * spawning a process or touching the network:
+     * <ul>
+     *   <li>{@link ProxyMode#MANUAL_PROXY} needs a host and a port in {@code 1..65535},</li>
+     *   <li>{@link ProxyMode#PAC_URL_MANUAL} needs a syntactically valid PAC URL,</li>
+     *   <li>{@link ProxyMode#WINDOWS_NATIVE_PROXY_SETTINGS} and
+     *       {@link ProxyMode#WINDOWS_NATIVE_ROUTE_RESOLVER} are not implemented in this version.</li>
+     * </ul>
+     *
+     * @return the problems found, empty when the configuration is usable; never {@code null}
+     * @since 0.2.0
+     */
+    public List<String> validationProblems() {
+        List<String> problems = new ArrayList<String>();
+        switch (mode) {
+            case MANUAL_PROXY:
+                if (manualProxyHost == null) {
+                    problems.add("MANUAL_PROXY requires manualProxyHost.");
+                }
+                if (manualProxyPort < 1 || manualProxyPort > 65535) {
+                    problems.add("MANUAL_PROXY requires manualProxyPort in 1..65535 (was " + manualProxyPort + ").");
+                }
+                break;
+            case PAC_URL_MANUAL:
+                if (pacUrl == null) {
+                    problems.add("PAC_URL_MANUAL requires pacUrl (the PAC/WPAD URL).");
+                } else {
+                    try {
+                        new URL(pacUrl);
+                    } catch (MalformedURLException e) {
+                        problems.add("PAC_URL_MANUAL pacUrl is not a valid URL: " + pacUrl);
+                    }
+                }
+                break;
+            case WINDOWS_NATIVE_PROXY_SETTINGS:
+            case WINDOWS_NATIVE_ROUTE_RESOLVER:
+                problems.add(mode + " is not implemented in this version of win-proxy-java"
+                        + " (resolve() returns NOT_IMPLEMENTED); choose another mode.");
+                break;
+            default:
+                break;
+        }
+        return Collections.unmodifiableList(problems);
+    }
+
+    /**
+     * Returns {@code true} when {@link #validationProblems()} is empty.
+     *
+     * @return whether the configuration is usable for its mode
+     * @since 0.2.0
+     */
+    public boolean isValid() {
+        return validationProblems().isEmpty();
+    }
+
+    /**
+     * Throws when the configuration is unusable for its mode; see {@link #validationProblems()}.
+     *
+     * @throws ProxyConfigurationException listing every problem found, one per line
+     * @since 0.2.0
+     */
+    public void validate() {
+        List<String> problems = validationProblems();
+        if (problems.isEmpty()) {
+            return;
+        }
+        StringBuilder message = new StringBuilder();
+        for (int i = 0; i < problems.size(); i++) {
+            if (i > 0) {
+                message.append('\n');
+            }
+            message.append(problems.get(i));
+        }
+        throw new ProxyConfigurationException(message.toString());
     }
 
     private static String defaultIfBlank(String value, String defaultValue) {
@@ -132,6 +227,13 @@ public final class ProxyConfiguration {
             return this;
         }
 
+        /**
+         * Sets the PAC URL discovery script: PowerShell for {@link ProxyMode#PAC_URL_POWERSHELL},
+         * VBScript for {@link ProxyMode#PAC_URL_WSCRIPT}. Blank selects the mode's default.
+         *
+         * @param pacUrlDiscoveryScript the script
+         * @return this builder
+         */
         public Builder pacUrlDiscoveryScript(String pacUrlDiscoveryScript) {
             this.pacUrlDiscoveryScript = pacUrlDiscoveryScript;
             return this;
