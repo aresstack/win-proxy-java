@@ -9,10 +9,14 @@ package com.aresstack.winproxy;
  * discovery step never determines the final route by itself.
  * <p>
  * The modes are cut along clear functional lines. In particular, the way the
- * <em>PAC URL</em> is discovered (PowerShell vs. Windows settings vs. manual)
- * is an explicit choice and is never silently mixed with static-proxy or
- * registry reading. No {@code PAC_URL_*} mode ever falls back to
+ * <em>PAC URL</em> is discovered (PowerShell vs. Windows Script Host vs. Windows
+ * settings vs. manual) is an explicit choice and is never silently mixed with
+ * static-proxy or registry reading. No {@code PAC_URL_*} mode ever falls back to
  * {@link #WINDOWS_STATIC_PROXY}, {@link #MANUAL_PROXY} or {@link #DISABLED}.
+ * <p>
+ * Modes that are not implemented in this version return a {@code NOT_IMPLEMENTED}
+ * {@link ProxyResult} and are rejected by {@link ProxyConfiguration#validate()};
+ * they never silently become DIRECT.
  */
 public enum ProxyMode {
 
@@ -93,18 +97,46 @@ public enum ProxyMode {
     POWERSHELL_ROUTE_RESOLVER_LEGACY,
 
     /**
-     * Reserved future Java 21 / FFM mode that will read proxy settings /
-     * {@code AutoConfigURL} / auto-detect through native Windows APIs and then
-     * use the Java/GraalVM PAC evaluation. Currently returns a
-     * {@code NOT_IMPLEMENTED} result — never DIRECT or a fallback.
+     * Reserved future mode that will read proxy settings / {@code AutoConfigURL} /
+     * auto-detect through native Windows APIs and then use the Java/GraalVM PAC
+     * evaluation.
+     * <p>
+     * <b>Not implemented as of 0.2.0.</b> {@link WindowsProxyResolver#resolve(String)}
+     * returns a {@code NOT_IMPLEMENTED} result (never DIRECT, never a fallback) and
+     * {@link ProxyConfiguration#validate()} rejects the mode, so a UI can tell the
+     * user up front instead of failing at request time.
      */
     WINDOWS_NATIVE_PROXY_SETTINGS,
 
     /**
-     * Reserved future Java 21 / FFM mode that will determine the final route for
-     * a concrete URL through WinHTTP / native Windows APIs (the native successor
-     * of {@link #POWERSHELL_ROUTE_RESOLVER_LEGACY}). Currently returns a
-     * {@code NOT_IMPLEMENTED} result — never DIRECT or a fallback.
+     * Reserved future mode that will determine the final route for a concrete URL
+     * through WinHTTP / native Windows APIs (the native successor of
+     * {@link #POWERSHELL_ROUTE_RESOLVER_LEGACY}).
+     * <p>
+     * <b>Not implemented as of 0.2.0.</b> {@link WindowsProxyResolver#resolve(String)}
+     * returns a {@code NOT_IMPLEMENTED} result (never DIRECT, never a fallback) and
+     * {@link ProxyConfiguration#validate()} rejects the mode.
      */
-    WINDOWS_NATIVE_ROUTE_RESOLVER
+    WINDOWS_NATIVE_ROUTE_RESOLVER,
+
+    /**
+     * Discovers the PAC URL through a VBScript executed by the Windows Script Host
+     * console runner ({@code cscript.exe}). The script is taken from
+     * {@link ProxyConfiguration#getPacUrlDiscoveryScript()}, which in this mode holds
+     * VBScript (default: {@link ProxyDefaults#DEFAULT_PAC_URL_DISCOVERY_WSCRIPT}), and
+     * must print the PAC URL on a line of its own; empty output means "no PAC URL
+     * configured". Afterwards the PAC file is downloaded and evaluated via
+     * GraalVM/JavaScript exactly like every other {@code PAC_URL_*} mode — the script
+     * only delivers the PAC URL, never the final route.
+     * <p>
+     * Compatibility mode for workstations where {@code powershell.exe} is blocked but
+     * {@code cscript.exe} is still allowed. Unlike PowerShell, {@code cscript.exe} has no
+     * inline command mode, so the script is written to a uniquely named temporary
+     * {@code .vbs} file for the duration of the call; AppLocker/WDAC script rules may
+     * block that. Microsoft has deprecated VBScript (a removable feature on demand since
+     * Windows 11 24H2), so prefer {@link #PAC_URL_WINDOWS_SETTINGS} where it works.
+     *
+     * @since 0.2.0
+     */
+    PAC_URL_WSCRIPT
 }

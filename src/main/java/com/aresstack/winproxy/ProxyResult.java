@@ -13,7 +13,8 @@ import java.net.Proxy;
  *       (e.g. {@link ProxyMode#DISABLED} or a PAC script returning {@code DIRECT}).</li>
  *   <li>{@link Kind#ERROR} — the selected mode failed; {@link #getReason()} carries
  *       the technical cause (e.g. {@code pac-url-not-found}, {@code pac-download-failed},
- *       {@code pac-evaluation-failed}). This is <b>not</b> DIRECT.</li>
+ *       {@code pac-evaluation-failed}) and {@link #getDetail()} the underlying message
+ *       when one is known. This is <b>not</b> DIRECT.</li>
  *   <li>{@link Kind#NOT_IMPLEMENTED} — the selected mode is reserved/not implemented.</li>
  * </ul>
  * Errors are never reported as DIRECT, so callers can distinguish "no proxy needed"
@@ -33,17 +34,19 @@ public final class ProxyResult {
     private final String host;
     private final int port;
     private final String reason;
+    private final String detail;
 
-    private ProxyResult(Kind kind, String host, int port, String reason) {
+    private ProxyResult(Kind kind, String host, int port, String reason, String detail) {
         this.kind = kind;
         this.host = host;
         this.port = port;
         this.reason = reason;
+        this.detail = detail;
     }
 
     /** Creates a DIRECT result (no proxy needed). */
     public static ProxyResult direct(String reason) {
-        return new ProxyResult(Kind.DIRECT, null, 0, reason);
+        return new ProxyResult(Kind.DIRECT, null, 0, reason, null);
     }
 
     /** Creates a DIRECT result with a generic reason. */
@@ -53,7 +56,7 @@ public final class ProxyResult {
 
     /** Creates a PROXY result. */
     public static ProxyResult proxy(String host, int port, String reason) {
-        return new ProxyResult(Kind.PROXY, host, port, reason);
+        return new ProxyResult(Kind.PROXY, host, port, reason, null);
     }
 
     /** Creates a PROXY result with a generic reason. */
@@ -63,12 +66,37 @@ public final class ProxyResult {
 
     /** Creates an ERROR result carrying the technical cause. Never DIRECT. */
     public static ProxyResult error(String reason) {
-        return new ProxyResult(Kind.ERROR, null, 0, reason);
+        return error(reason, null);
+    }
+
+    /**
+     * Creates an ERROR result carrying the technical cause and a human-readable detail
+     * (typically the message of the underlying exception). Never DIRECT.
+     *
+     * @param reason machine-readable reason such as {@code pac-evaluation-failed}
+     * @param detail free-text detail, may be {@code null}
+     * @return the ERROR result
+     * @since 0.2.0
+     */
+    public static ProxyResult error(String reason, String detail) {
+        return new ProxyResult(Kind.ERROR, null, 0, reason, trimToNull(detail));
     }
 
     /** Creates a NOT_IMPLEMENTED result. Never DIRECT, never a fallback. */
     public static ProxyResult notImplemented(String reason) {
-        return new ProxyResult(Kind.NOT_IMPLEMENTED, null, 0, reason);
+        return notImplemented(reason, null);
+    }
+
+    /**
+     * Creates a NOT_IMPLEMENTED result with a human-readable detail. Never DIRECT, never a fallback.
+     *
+     * @param reason machine-readable reason
+     * @param detail free-text detail, may be {@code null}
+     * @return the NOT_IMPLEMENTED result
+     * @since 0.2.0
+     */
+    public static ProxyResult notImplemented(String reason, String detail) {
+        return new ProxyResult(Kind.NOT_IMPLEMENTED, null, 0, reason, trimToNull(detail));
     }
 
     /** Returns the {@link Kind} of this result. */
@@ -94,6 +122,17 @@ public final class ProxyResult {
 
     /** Returns a machine-readable diagnostic reason for this result. */
     public String getReason() { return reason; }
+
+    /**
+     * Returns a human-readable detail for {@link Kind#ERROR} / {@link Kind#NOT_IMPLEMENTED}
+     * results (typically the message chain of the underlying exception, e.g. the GraalJS
+     * {@code PolyglotException} behind a {@code pac-evaluation-failed}), or {@code null} when
+     * none is known.
+     *
+     * @return the detail or {@code null}
+     * @since 0.2.0
+     */
+    public String getDetail() { return detail; }
 
     /**
      * Converts to {@link java.net.Proxy}, honouring the {@link Kind}:
@@ -149,11 +188,23 @@ public final class ProxyResult {
             case DIRECT:
                 return "DIRECT (" + reason + ")";
             case ERROR:
-                return "ERROR (" + reason + ")";
+                return "ERROR (" + reason + ")" + detailSuffix();
             case NOT_IMPLEMENTED:
-                return "NOT_IMPLEMENTED (" + reason + ")";
+                return "NOT_IMPLEMENTED (" + reason + ")" + detailSuffix();
             default:
                 return String.valueOf(reason);
         }
+    }
+
+    private String detailSuffix() {
+        return detail == null ? "" : ": " + detail;
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.length() == 0 ? null : trimmed;
     }
 }

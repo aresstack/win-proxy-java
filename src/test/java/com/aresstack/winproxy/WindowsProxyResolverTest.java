@@ -236,6 +236,32 @@ class WindowsProxyResolverTest {
         assertFalse(settings.isDirect());
         assertTrue(route.isNotImplemented());
         assertFalse(route.isDirect());
+        assertNotNull(settings.getDetail(), "not-implemented modes must say so, never stay silent");
+        assertNotNull(route.getDetail());
+        assertThrows(IllegalStateException.class, settings::toJavaProxy);
+    }
+
+    @Test
+    void everyModeIsHandledByTheFacade() {
+        // A new ProxyMode constant must be wired explicitly — the facade must never answer
+        // "unknown-proxy-mode" for a declared mode.
+        for (ProxyMode mode : ProxyMode.values()) {
+            ProxyConfiguration.Builder builder = ProxyConfiguration.builder().mode(mode);
+            if (mode == ProxyMode.MANUAL_PROXY) {
+                builder.manualProxyHost("proxy.example.com").manualProxyPort(8080);
+            }
+            if (mode == ProxyMode.PAC_URL_POWERSHELL || mode == ProxyMode.PAC_URL_WSCRIPT
+                    || mode == ProxyMode.PAC_URL_WINDOWS_SETTINGS || mode == ProxyMode.WINDOWS_STATIC_PROXY
+                    || mode == ProxyMode.POWERSHELL_ROUTE_RESOLVER_LEGACY) {
+                // these spawn powershell.exe / cscript.exe / reg.exe — only exercised on Windows
+                continue;
+            }
+
+            ProxyResult result = new WindowsProxyResolver(builder.build()).resolve("https://plugins.gradle.org/m2/");
+
+            assertNotNull(result, mode.name());
+            assertFalse("unknown-proxy-mode".equals(result.getReason()), mode + " is not wired in the facade");
+        }
     }
 
     // ── PAC evaluation ──

@@ -36,13 +36,19 @@ class PacPipelineDiagnosticTest {
         runMode(ProxyMode.PAC_URL_WINDOWS_SETTINGS, ProxyConfiguration.builder()
                 .mode(ProxyMode.PAC_URL_WINDOWS_SETTINGS));
 
+        // PAC URL via cscript.exe / VBScript (no PowerShell, no reg.exe)
+        runMode(ProxyMode.PAC_URL_WSCRIPT, ProxyConfiguration.builder()
+                .mode(ProxyMode.PAC_URL_WSCRIPT));
+
         System.out.println("==================================================================");
     }
 
     private void runMode(ProxyMode mode, ProxyConfiguration.Builder builder) {
         try {
-            ProxyResult result = new WindowsProxyResolver(builder.build()).resolve(TARGET_URL);
-            System.out.println("[" + mode + "] -> " + result + "  (kind=" + result.getKind() + ")");
+            ProxyDiagnostics diagnostics = new WindowsProxyResolver(builder.build()).diagnose(TARGET_URL);
+            System.out.println("[" + mode + "] -> " + diagnostics.getResult()
+                    + "  (kind=" + diagnostics.getResult().getKind() + ")");
+            System.out.println(diagnostics.describe());
         } catch (Throwable t) {
             System.out.println("[" + mode + "] THREW: " + t);
             t.printStackTrace(System.out);

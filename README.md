@@ -13,7 +13,8 @@ Windows setup: Windows stores the address of a PAC/WPAD file, the library discov
 address (by default via an inline PowerShell `-Command` one-liner), downloads the file, and
 evaluates `FindProxyForURL(url, host)` locally. `PAC_URL_WINDOWS_SETTINGS` is the explicit
 alternative that discovers the same PAC URL through `reg.exe`/Windows settings without ever
-starting PowerShell.
+starting PowerShell, and `PAC_URL_WSCRIPT` (since 0.2.0) discovers it through a VBScript run
+by `cscript.exe` for workstations where PowerShell is blocked.
 
 ## Installation
 
@@ -21,14 +22,14 @@ starting PowerShell.
 <dependency>
   <groupId>com.aresstack</groupId>
   <artifactId>win-proxy-java</artifactId>
-  <version>0.1.0-beta.4</version>
+  <version>0.2.0</version>
 </dependency>
 ```
 
 Gradle:
 
 ```groovy
-implementation 'com.aresstack:win-proxy-java:0.1.0-beta.4'
+implementation 'com.aresstack:win-proxy-java:0.2.0'
 ```
 
 ## Why this library exists
@@ -189,9 +190,18 @@ result; failures surface as an `ERROR` `ProxyResult` with a technical reason.
 | `PAC_URL_MANUAL` | Use a user-configured PAC URL, then download + GraalVM PAC evaluation. |
 | `PAC_URL_POWERSHELL` | Discover the PAC URL via PowerShell (`AutoConfigURL` one-liner, inline `-Command`), then download + GraalVM. **Important path on hardened machines.** |
 | `PAC_URL_WINDOWS_SETTINGS` | Discover the PAC URL via `reg.exe`/Windows settings (all hives/policies, `DefaultConnectionSettings` blob, WPAD auto-detect flag) — no PowerShell — then download + GraalVM. |
+| `PAC_URL_WSCRIPT` | Discover the PAC URL via a VBScript run by the Windows Script Host (`cscript.exe //NoLogo //T:20`), then download + GraalVM. The script (field `pacUrlDiscoveryScript`, default `ProxyDefaults.DEFAULT_PAC_URL_DISCOVERY_WSCRIPT`) prints the PAC URL; empty output = no PAC URL. Compatibility mode for machines where `powershell.exe` is blocked but `cscript.exe` is not. *Since 0.2.0.* |
 | `POWERSHELL_ROUTE_RESOLVER_LEGACY` | **Deprecated.** Legacy `GetSystemWebProxy()` PowerShell/.NET route resolution (no GraalVM). Not for normal use. |
-| `WINDOWS_NATIVE_PROXY_SETTINGS` | Reserved Java 21/FFM mode. Returns `NOT_IMPLEMENTED`. |
-| `WINDOWS_NATIVE_ROUTE_RESOLVER` | Reserved Java 21/FFM mode. Returns `NOT_IMPLEMENTED`. |
+| `WINDOWS_NATIVE_PROXY_SETTINGS` | **Not implemented** (reserved for a future native implementation). `resolve()` returns `NOT_IMPLEMENTED` with a detail text, never DIRECT; `ProxyConfiguration.validate()` rejects the mode. |
+| `WINDOWS_NATIVE_ROUTE_RESOLVER` | **Not implemented** (reserved for a future native implementation). `resolve()` returns `NOT_IMPLEMENTED` with a detail text, never DIRECT; `ProxyConfiguration.validate()` rejects the mode. |
+
+### Mode status in 0.2.0
+
+| Status | Modes |
+| --- | --- |
+| Implemented and tested | `DISABLED`, `MANUAL_PROXY`, `WINDOWS_STATIC_PROXY`, `PAC_URL_MANUAL`, `PAC_URL_POWERSHELL`, `PAC_URL_WINDOWS_SETTINGS`, `PAC_URL_WSCRIPT` |
+| Implemented, deprecated | `POWERSHELL_ROUTE_RESOLVER_LEGACY` |
+| Not implemented (reserved) | `WINDOWS_NATIVE_PROXY_SETTINGS`, `WINDOWS_NATIVE_ROUTE_RESOLVER` |
 
 ### Result kinds
 
@@ -200,6 +210,10 @@ result; failures surface as an `ERROR` `ProxyResult` with a technical reason.
 when the mode genuinely yields direct (e.g. `DISABLED`, or a PAC script returning `DIRECT`).
 Discovery/download/evaluation failures return `ERROR` with reasons such as
 `pac-url-not-found`, `pac-url-discovery-failed`, `pac-download-failed` or `pac-evaluation-failed`.
+Since 0.2.0 an `ERROR` / `NOT_IMPLEMENTED` result also carries `getDetail()`: the message chain of
+the underlying exception (for `pac-evaluation-failed` that is the GraalJS `PolyglotException`,
+e.g. `No language for id regex found`), and `toString()` prints it as
+`ERROR (pac-evaluation-failed): ...`.
 
 ## PAC discovery on hardened machines
 
@@ -207,6 +221,13 @@ Discovery/download/evaluation failures return `ERROR` with reasons such as
 `powershell.exe -Command` (never a temporary `.ps1` in `%TEMP%`), so it keeps working where
 GPO execution policy or AppLocker block unsigned script files. If PowerShell itself is locked
 down, `PAC_URL_WINDOWS_SETTINGS` reads the PAC URL through `reg.exe` without any PowerShell.
+
+`PAC_URL_WSCRIPT` is the third option: a VBScript run by `cscript.exe` prints the PAC URL.
+`cscript.exe` has no inline command mode, so the script is written to a uniquely named
+temporary `.vbs` for the duration of the call (AppLocker/WDAC *script rules* may block that,
+while PowerShell *execution policy* does not apply to it). The run is bounded by
+`//T:20` and a Java-side kill. Microsoft has deprecated VBScript (a removable feature on
+demand since Windows 11 24H2), so prefer `PAC_URL_WINDOWS_SETTINGS` where it works.
 
 ```java
 ProxyConfiguration configuration = ProxyConfiguration.builder()
@@ -271,6 +292,50 @@ If `plugins.gradle.org` resolves to `DIRECT` while the sentinel PAC is configure
 file was not loaded/evaluated — that is exactly the regression this sentinel guards against.
 
 
+## Validate a configuration before using it
+
+`ProxyConfiguration.validate()` (or `validationProblems()` / `isValid()`) reports incomplete
+settings and not-implemented modes without spawning a process or touching the network, so a
+settings dialog can refuse to save or test an unusable configuration:
+
+```java
+ProxyConfiguration configuration = ProxyConfiguration.builder()
+        .mode(ProxyMode.MANUAL_PROXY)
+        .manualProxyHost("proxy.example.com")
+        .build();
+
+List<String> problems = configuration.validationProblems();
+// ["MANUAL_PROXY requires manualProxyPort in 1..65535 (was 0)."]
+
+configuration.validate(); // throws ProxyConfigurationException listing the problems
+```
+
+## Diagnostics ("resolve test")
+
+`WindowsProxyResolver.diagnose(url)` performs exactly the same resolution as `resolve(url)`
+and records every step, so a "resolve test" button can show *where* the PAC URL came from,
+whether the PAC file was reachable, what `FindProxyForURL` returned and — on failure — the
+underlying message instead of an opaque reason:
+
+```java
+ProxyDiagnostics diagnostics = new WindowsProxyResolver(configuration)
+        .diagnose("https://repo.maven.apache.org/maven2/");
+
+System.out.println(diagnostics.describe());
+// Mode: PAC_URL_POWERSHELL
+// Target URL: https://repo.maven.apache.org/maven2/
+// - PAC URL: http://proxy.example.com/wpad.dat (source: powershell)
+// - PAC script downloaded (2310 characters).
+// - FindProxyForURL -> PROXY 10.0.0.1:3128 (resolved)
+// Result: PROXY 10.0.0.1:3128 (resolved) [412 ms]
+
+ProxyResult result = diagnostics.getResult(); // identical to resolve(url)
+```
+
+`getPacUrl()` / `getPacUrlSource()` / `getPacScriptLength()` / `getFailureDetail()` expose the
+same facts programmatically. The diagnosis only resolves the route; it performs no request
+to the target URL.
+
 ## Apply the result to JVM system properties
 
 ```java
@@ -298,6 +363,9 @@ if (proxy.isProxy()) {
 | `FixedPacUrlResolver` | PAC URL from explicit configuration (`PAC_URL_MANUAL`). |
 | `PowerShellPacUrlResolver` | PAC URL via inline PowerShell `-Command` (`PAC_URL_POWERSHELL`). |
 | `WindowsPacUrlResolver` | PAC URL via `reg.exe`/Windows settings (`PAC_URL_WINDOWS_SETTINGS`). |
+| `WScriptPacUrlResolver` | PAC URL via a VBScript run by `cscript.exe` (`PAC_URL_WSCRIPT`). |
+| `ProxyDiagnostics` | Step-by-step record of one resolution (`WindowsProxyResolver.diagnose`). |
+| `ProxyConfigurationException` | Thrown by `ProxyConfiguration.validate()` for unusable settings. |
 | `PacScriptLoader` | Port for loading PAC script content. |
 | `PacEvaluator` / `GraalPacScriptEvaluator` | GraalJS based PAC evaluator. |
 | `PacProxyRouteParser` | Parses the `FindProxyForURL` route string. |
@@ -311,6 +379,7 @@ if (proxy.isProxy()) {
 - Windows for automatic registry-based discovery.
 - GraalJS on the runtime classpath for PAC script evaluation.
 - PowerShell only when using `PAC_URL_POWERSHELL` or `POWERSHELL_ROUTE_RESOLVER_LEGACY`.
+- Windows Script Host (`cscript.exe`, VBScript) only when using `PAC_URL_WSCRIPT`.
 
 ## Building from source
 
@@ -419,7 +488,7 @@ and confirm it no longer returns `pac-evaluation-failed`.
 - Registry-based PAC URL discovery is Windows-specific.
 - Maven Central versions are immutable. Publish fixes with a new version.
 - Consumers should depend on a published coordinate (e.g.
-  `com.aresstack:win-proxy-java:0.1.0-beta.4`). `mavenLocal()` is only acceptable as a
+  `com.aresstack:win-proxy-java:0.2.0`). `mavenLocal()` is only acceptable as a
   temporary local-test path and must be removed before a downstream merge/release. If a
   required version is not yet published remotely, treat publishing it as an explicit release
   step (TODO) rather than relying on `mavenLocal()`.
