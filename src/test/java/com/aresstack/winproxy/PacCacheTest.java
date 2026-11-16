@@ -116,24 +116,101 @@ class PacCacheTest {
             discoveries.incrementAndGet();
             return PacUrlResolution.found(PAC_URL, "test");
         };
+        PacUrlProxyResolver pipeline = new PacUrlProxyResolver(discovery, loader, evaluator, cache, false);
 
         for (int i = 0; i < 10; i++) {
-            assertEquals(PAC_URL, cache.resolve(discovery).getPacUrl());
+            assertTrue(pipeline.resolve("https://confluence.example.com/").isProxy());
         }
 
         assertEquals(1, discoveries.get());
+        assertEquals(1, downloads.get());
     }
 
     @Test
-    void failedRediscoveryKeepsTheLastGoodPacUrl() {
+    void failedRediscoveryKeepsTheLastGoodScript() {
         PacCache cache = new PacCache();
-        cache.resolve(() -> PacUrlResolution.found(PAC_URL, "test"));
+        AtomicBoolean blocked = new AtomicBoolean();
+        PacUrlResolver discovery = () -> {
+            if (blocked.get()) {
+                throw new ProxyResolutionException("powershell blocked");
+            }
+            return PacUrlResolution.found(PAC_URL, "test");
+        };
+        PacUrlProxyResolver pipeline = new PacUrlProxyResolver(discovery, loader, evaluator, cache, false);
+        pipeline.resolve("https://confluence.example.com/");
+
+        blocked.set(true);
+        cache.invalidate();
+
+        assertTrue(pipeline.resolve("https://confluence.example.com/").isProxy());
+        assertEquals(1, downloads.get());
+    }
+
+    @Test
+    void unreachableNewPacUrlKeepsTheLastGoodPair() {
+        PacCache cache = new PacCache();
+        AtomicBoolean moved = new AtomicBoolean();
+        PacUrlResolver discovery = () -> PacUrlResolution.found(
+                moved.get() ? "http://other.example.com/proxy.pac" : PAC_URL, "test");
+        PacScriptLoader byUrl = pacUrl -> {
+            downloads.incrementAndGet();
+            if (!PAC_URL.equals(pacUrl)) {
+                throw new ProxyResolutionException("Could not load PAC script from " + pacUrl + ".");
+            }
+            return SCRIPT;
+        };
+        PacUrlProxyResolver pipeline = new PacUrlProxyResolver(discovery, byUrl, evaluator, cache, false);
+        pipeline.resolve("https://confluence.example.com/");
+
+        moved.set(true);
+        cache.invalidate();
+        ProxyResult afterMove = pipeline.resolve("https://confluence.example.com/");
+        ProxyResult later = pipeline.resolve("https://confluence.example.com/");
+
+        assertTrue(afterMove.isProxy(), afterMove.toString());
+        assertTrue(later.isProxy(), later.toString());
+        assertEquals(2, downloads.get(), "one failed attempt for the new URL, then the last good pair");
+    }
+
+    @Test
+    void brokenDownloadNeverReplacesAWorkingScript() {
+        PacCache cache = new PacCache();
+        AtomicBoolean broken = new AtomicBoolean();
+        PacScriptLoader content = pacUrl -> {
+            downloads.incrementAndGet();
+            return broken.get() ? "" : SCRIPT;
+        };
+        PacEvaluator strict = (script, url) -> {
+            if (script.trim().isEmpty()) {
+                throw new ProxyResolutionException("FindProxyForURL is not defined");
+            }
+            return ProxyResult.of("proxy.example.com", 3128);
+        };
+        PacUrlResolver discovery = () -> PacUrlResolution.found(PAC_URL, "test");
+        PacUrlProxyResolver resolving = new PacUrlProxyResolver(discovery, content, strict, cache, false);
+        PacUrlProxyResolver diagnosing = new PacUrlProxyResolver(discovery, content, strict, cache, true);
+        resolving.resolve("https://confluence.example.com/");
+
+        broken.set(true);
+        assertEquals("pac-evaluation-failed",
+                diagnosing.diagnose("https://confluence.example.com/").getResult().getReason());
+        assertTrue(resolving.resolve("https://confluence.example.com/").isProxy());
 
         cache.invalidate();
-        PacUrlResolution kept = cache.resolve(() -> {
-            throw new ProxyResolutionException("powershell blocked");
-        });
+        assertTrue(resolving.resolve("https://confluence.example.com/").isProxy());
+        assertTrue(resolving.resolve("https://confluence.example.com/").isProxy());
+        assertEquals(3, downloads.get());
+    }
 
-        assertEquals(PAC_URL, kept.getPacUrl());
+    @Test
+    void aDiagnosisStartedBeforeAnInvalidationDoesNotUndoIt() {
+        PacCache cache = new PacCache();
+        long before = cache.generation();
+        cache.invalidate();
+
+        cache.store(before, PacUrlResolution.found(PAC_URL, "test"), SCRIPT);
+
+        assertEquals(null, cache.current());
+        assertEquals(null, cache.lastGood());
     }
 }

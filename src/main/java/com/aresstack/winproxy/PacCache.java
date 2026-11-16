@@ -1,109 +1,106 @@
 package com.aresstack.winproxy;
 
 /**
- * Remembers the discovered PAC URL and the downloaded PAC script of one
- * {@link WindowsProxyResolver}, so that the PAC URL discovery (PowerShell, WScript, registry)
- * and the PAC download run once and not on every {@code resolve()}.
+ * Remembers the last good PAC URL and PAC script of one {@link WindowsProxyResolver}, so that
+ * the PAC URL discovery (PowerShell, WScript, registry) and the PAC download run once and not
+ * on every {@code resolve()}.
  * <p>
- * Rules:
+ * Rules (applied by {@link PacUrlProxyResolver}):
  * <ul>
- *   <li>The first resolution discovers the PAC URL and downloads the script; every later one
- *       reuses both. Concurrent first resolutions wait for that single load.</li>
- *   <li>{@link #invalidate()} marks both as outdated; the next resolution loads them again.</li>
- *   <li>If that reload fails, the last good PAC URL and script stay in use (until the next
- *       {@link #invalidate()}), so a briefly unreachable WPAD server never breaks routes
- *       that worked before. Without a last good value the failure is reported as before.</li>
- *   <li>A discovery that now finds no PAC URL at all is taken as a configuration change and
- *       forgets the remembered values.</li>
+ *   <li>A pair of PAC URL and script is only remembered after the script was evaluated
+ *       successfully; an empty or broken download never replaces a working script.</li>
+ *   <li>{@link #invalidate()} marks the pair as outdated; the next resolution loads again. If
+ *       that reload fails at any step (discovery, download, evaluation, also for a newly
+ *       discovered PAC URL), the last good pair stays in use until the next invalidation.</li>
+ *   <li>A discovery that finds no PAC URL at all is taken as a configuration change and
+ *       forgets the pair.</li>
+ *   <li>Every write carries the {@link #generation()} read before the load started; a write
+ *       from a load that began before the latest {@link #invalidate()} is ignored, so a slow
+ *       diagnosis cannot undo an invalidation.</li>
  * </ul>
- * Instances are thread-safe.
+ * Instances are thread-safe; {@link #loadLock()} lets concurrent first resolutions wait for a
+ * single load.
  */
 final class PacCache {
 
+    /** A PAC URL with the script downloaded from it. */
+    static final class Entry {
+        final PacUrlResolution resolution;
+        final String script;
+
+        Entry(PacUrlResolution resolution, String script) {
+            this.resolution = resolution;
+            this.script = script;
+        }
+    }
+
     private final Object lock = new Object();
+    private final Object loadLock = new Object();
 
-    private PacUrlResolution resolution;
-    private boolean resolutionOutdated;
-    private String scriptUrl;
-    private String script;
-    private boolean scriptOutdated;
+    private Entry entry;
+    private boolean outdated;
+    private long generation;
 
-    /** The remembered PAC URL, discovered through {@code discovery} only when needed. */
-    PacUrlResolution resolve(PacUrlResolver discovery) {
+    /** The remembered pair if it is current (not outdated), otherwise {@code null}. */
+    Entry current() {
         synchronized (lock) {
-            if (resolution != null && !resolutionOutdated) {
-                return resolution;
-            }
-            try {
-                return storeResolution(discovery.resolve());
-            } catch (ProxyResolutionException e) {
-                if (resolution == null) {
-                    throw e;
-                }
-                resolutionOutdated = false;
-                return resolution;
-            }
+            return outdated ? null : entry;
         }
     }
 
-    /** The remembered PAC script of {@code pacUrl}, downloaded through {@code loader} only when needed. */
-    String load(PacScriptLoader loader, String pacUrl) {
+    /** The last good pair, current or outdated, or {@code null}. */
+    Entry lastGood() {
         synchronized (lock) {
-            if (script != null && !scriptOutdated && pacUrl.equals(scriptUrl)) {
-                return script;
-            }
-            try {
-                return storeScript(pacUrl, loader.load(pacUrl));
-            } catch (ProxyResolutionException e) {
-                if (script == null || !pacUrl.equals(scriptUrl)) {
-                    throw e;
-                }
-                scriptOutdated = false;
-                return script;
+            return entry;
+        }
+    }
+
+    /** Counter of invalidations; read before a load and passed to the writes. */
+    long generation() {
+        synchronized (lock) {
+            return generation;
+        }
+    }
+
+    /** Remembers a successfully evaluated pair, unless the cache was invalidated since {@code loadGeneration}. */
+    void store(long loadGeneration, PacUrlResolution resolution, String script) {
+        synchronized (lock) {
+            if (loadGeneration == generation) {
+                entry = new Entry(resolution, script);
+                outdated = false;
             }
         }
     }
 
-    /** Discovers the PAC URL now, without falling back; a found URL is remembered. For diagnostics. */
-    PacUrlResolution resolveFresh(PacUrlResolver discovery) {
-        PacUrlResolution fresh = discovery.resolve();
+    /** A reload failed: keep using the last good pair until the next invalidation. */
+    void keepLastGood(long loadGeneration) {
         synchronized (lock) {
-            return storeResolution(fresh);
+            if (loadGeneration == generation && entry != null) {
+                outdated = false;
+            }
         }
     }
 
-    /** Downloads the PAC script now, without falling back; the script is remembered. For diagnostics. */
-    String loadFresh(PacScriptLoader loader, String pacUrl) {
-        String fresh = loader.load(pacUrl);
+    /** The discovery found no PAC URL: forget the pair. */
+    void forget(long loadGeneration) {
         synchronized (lock) {
-            return storeScript(pacUrl, fresh);
+            if (loadGeneration == generation) {
+                entry = null;
+                outdated = false;
+            }
         }
     }
 
-    /** Marks PAC URL and script as outdated; the next resolution loads them again. */
+    /** Marks the pair as outdated; the next resolution loads again. */
     void invalidate() {
         synchronized (lock) {
-            resolutionOutdated = true;
-            scriptOutdated = true;
+            generation++;
+            outdated = true;
         }
     }
 
-    private PacUrlResolution storeResolution(PacUrlResolution fresh) {
-        if (fresh == null || !fresh.isPresent()) {
-            resolution = null;
-            script = null;
-            scriptUrl = null;
-        } else {
-            resolution = fresh;
-        }
-        resolutionOutdated = false;
-        return fresh;
-    }
-
-    private String storeScript(String pacUrl, String fresh) {
-        script = fresh;
-        scriptUrl = pacUrl;
-        scriptOutdated = false;
-        return fresh;
+    /** Serialises loads of the resolution path. */
+    Object loadLock() {
+        return loadLock;
     }
 }

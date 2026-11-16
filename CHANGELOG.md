@@ -20,7 +20,10 @@ All notable changes to `win-proxy-java` are documented here. Versions follow
 - **`WindowsProxyResolver.invalidatePacCache()`** — marks the remembered PAC URL and script as
   outdated (e.g. after a network change); the next `resolve()` loads them again. If that reload
   fails, the last good PAC URL and script stay in use, so a briefly unreachable WPAD server no
-  longer breaks working routes. A discovery that finds no PAC URL at all forgets them.
+  longer breaks working routes. This also holds when the reload discovers a different PAC URL
+  that cannot be loaded. A PAC script is only remembered after it was evaluated successfully,
+  so an empty or broken download never replaces a working one; a load that started before an
+  invalidation cannot undo it. A discovery that finds no PAC URL at all forgets them.
 - `diagnose(url)` still discovers and downloads afresh, so a "resolve test" shows whether the
   WPAD server is reachable right now; a successful diagnosis refreshes the remembered values.
 

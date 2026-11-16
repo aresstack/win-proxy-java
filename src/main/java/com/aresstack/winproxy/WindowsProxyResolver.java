@@ -171,19 +171,13 @@ public final class WindowsProxyResolver {
     }
 
     /** PAC pipeline over the remembered PAC URL and script (loaded only when needed). */
-    private PacUrlProxyResolver cachedPacPipeline(final PacUrlResolver pacUrlResolver) {
-        return new PacUrlProxyResolver(
-                () -> pacCache.resolve(pacUrlResolver),
-                pacUrl -> pacCache.load(pacScriptLoader, pacUrl),
-                pacEvaluator);
+    private PacUrlProxyResolver cachedPacPipeline(PacUrlResolver pacUrlResolver) {
+        return new PacUrlProxyResolver(pacUrlResolver, pacScriptLoader, pacEvaluator, pacCache, false);
     }
 
-    /** PAC pipeline that discovers and downloads now and remembers what it got. */
-    private PacUrlProxyResolver freshPacPipeline(final PacUrlResolver pacUrlResolver) {
-        return new PacUrlProxyResolver(
-                () -> pacCache.resolveFresh(pacUrlResolver),
-                pacUrl -> pacCache.loadFresh(pacScriptLoader, pacUrl),
-                pacEvaluator);
+    /** PAC pipeline that discovers and downloads now and remembers a successful result. */
+    private PacUrlProxyResolver freshPacPipeline(PacUrlResolver pacUrlResolver) {
+        return new PacUrlProxyResolver(pacUrlResolver, pacScriptLoader, pacEvaluator, pacCache, true);
     }
 
     /**
