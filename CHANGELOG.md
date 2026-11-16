@@ -11,21 +11,29 @@ All notable changes to `win-proxy-java` are documented here. Versions follow
   `WindowsProxyResolver` ran the PAC URL discovery (PowerShell/WScript process or registry
   read) and downloaded the PAC file for each call. Callers resolving many URLs hit the WPAD
   server constantly; once it throttled or timed out, routes that had worked failed with
-  `pac-download-failed`. Each resolver instance now discovers the PAC URL and downloads the
-  script once and evaluates the remembered script afterwards. Concurrent first resolutions
-  wait for that single load.
+  `pac-download-failed`.
 
 ### Added
 
-- **`WindowsProxyResolver.invalidatePacCache()`** — marks the remembered PAC URL and script as
-  outdated (e.g. after a network change); the next `resolve()` loads them again. If that reload
-  fails, the last good PAC URL and script stay in use, so a briefly unreachable WPAD server no
-  longer breaks working routes. This also holds when the reload discovers a different PAC URL
-  that cannot be loaded. A PAC script is only remembered after it was evaluated successfully,
-  so an empty or broken download never replaces a working one; a load that started before an
-  invalidation cannot undo it. A discovery that finds no PAC URL at all forgets them.
-- `diagnose(url)` still discovers and downloads afresh, so a "resolve test" shows whether the
-  WPAD server is reachable right now; a successful diagnosis refreshes the remembered values.
+- **PAC cache with lifetime.** Each resolver remembers PAC URL and script and reloads them
+  lazily during a resolution (no timer, no polling): after the lifetime the PAC server announces
+  (`Cache-Control: max-age`, `no-cache`/`no-store`, `Expires`), clamped to 5 min … 24 h, or after
+  12 h (like Chromium) when it announces none. Reloads revalidate with `If-None-Match` /
+  `If-Modified-Since`; an HTTP 304 keeps the script without downloading it again.
+- **Last good script on failure.** If a reload fails (discovery, download, evaluation, also for a
+  newly discovered PAC URL), the last good PAC URL and script stay in use and the next attempt
+  waits 1 min, doubling up to 1 h. While one resolution reloads, others keep using the last good
+  script instead of waiting. A script is only remembered after it was evaluated successfully;
+  a load that started before an invalidation cannot undo it. A discovery that finds no PAC URL
+  at all forgets the script.
+- **`WindowsProxyResolver.invalidatePacCache()`** — reload at the next `resolve()`, e.g. after a
+  network change or when a connection over a resolved proxy failed (Windows/WinHTTP reloads on
+  an IP address change).
+- **`WindowsProxyResolver.pacCacheStatus()` / `PacCacheStatus`** — when the script was loaded,
+  until when it is valid, and since when refreshing fails (`isStale()`, `describe()`), for a
+  status line or log.
+- `diagnose(url)` still discovers and downloads afresh and appends the cache state; a successful
+  diagnosis refreshes the remembered script.
 
 ## 0.2.0 — first non-beta release
 

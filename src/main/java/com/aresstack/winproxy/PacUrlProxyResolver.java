@@ -75,39 +75,54 @@ public final class PacUrlProxyResolver {
     ProxyDiagnostics diagnose(ProxyMode mode, String targetUrl) {
         ProxyDiagnostics.Builder diagnostics = ProxyDiagnostics.builder(mode, targetUrl);
         if (cache == null) {
-            return load(diagnostics, targetUrl, -1L);
+            return load(diagnostics, targetUrl, -1L, null);
         }
         if (fresh) {
-            return load(diagnostics, targetUrl, cache.generation());
-        }
-        PacCache.Entry current = cache.current();
-        if (current == null) {
-            synchronized (cache.loadLock()) {
-                current = cache.current();
-                if (current == null) {
-                    return reload(diagnostics, targetUrl);
-                }
-            }
-        }
-        return evaluate(diagnostics, current, targetUrl, "remembered");
-    }
-
-    /** Loads again after an invalidation (or the first time); on failure falls back to the last good pair. */
-    private ProxyDiagnostics reload(ProxyDiagnostics.Builder diagnostics, String targetUrl) {
-        long generation = cache.generation();
-        ProxyDiagnostics loaded = load(diagnostics, targetUrl, generation);
-        ProxyResult result = loaded.getResult();
-        PacCache.Entry lastGood = cache.lastGood();
-        if (!isPacFailure(result) || "pac-url-not-found".equals(result.getReason()) || lastGood == null) {
+            ProxyDiagnostics loaded = load(diagnostics, targetUrl, cache.generation(), null);
+            diagnostics.step("Remembered: " + cache.status().describe());
             return loaded;
         }
-        cache.keepLastGood(generation);
+        PacCache.Entry lastGood = cache.lastGood();
+        if (lastGood != null && !cache.needsReload()) {
+            return evaluate(diagnostics, lastGood, targetUrl, "remembered");
+        }
+        if (lastGood == null) {
+            // Nothing to fall back to: wait for the single first load.
+            cache.loadLock().lock();
+        } else if (!cache.loadLock().tryLock()) {
+            // Another resolution is reloading right now: keep using the last good script.
+            return evaluate(diagnostics, lastGood, targetUrl, "remembered, reload in progress");
+        }
+        try {
+            lastGood = cache.lastGood();
+            if (lastGood != null && !cache.needsReload()) {
+                return evaluate(diagnostics, lastGood, targetUrl, "remembered");
+            }
+            return reload(diagnostics, targetUrl, lastGood);
+        } finally {
+            cache.loadLock().unlock();
+        }
+    }
+
+    /** Loads again (first time, lifetime over or invalidated); on failure falls back to the last good pair. */
+    private ProxyDiagnostics reload(ProxyDiagnostics.Builder diagnostics, String targetUrl, PacCache.Entry lastGood) {
+        long generation = cache.generation();
+        ProxyDiagnostics loaded = load(diagnostics, targetUrl, generation, lastGood);
+        ProxyResult result = loaded.getResult();
+        if (!isPacFailure(result) || "pac-url-not-found".equals(result.getReason())) {
+            return loaded;
+        }
+        cache.reloadFailed(generation, result.getDetail() != null ? result.getDetail() : result.getReason());
+        if (lastGood == null) {
+            return loaded;
+        }
         diagnostics.step("Reload failed, using the last good PAC script.");
         return evaluate(diagnostics, lastGood, targetUrl, "last good");
     }
 
     /** Discovery, download and evaluation; remembers a success when a cache is present. */
-    private ProxyDiagnostics load(ProxyDiagnostics.Builder diagnostics, String targetUrl, long generation) {
+    private ProxyDiagnostics load(ProxyDiagnostics.Builder diagnostics, String targetUrl, long generation,
+                                  PacCache.Entry previous) {
         PacUrlResolution resolution;
         try {
             resolution = pacUrlResolver.resolve();
@@ -118,7 +133,7 @@ public final class PacUrlProxyResolver {
         }
         if (resolution == null || !resolution.isPresent()) {
             diagnostics.step("No PAC/WPAD URL was discovered.");
-            if (cache != null) {
+            if (cache != null && !fresh) {
                 cache.forget(generation);
             }
             return diagnostics.finish(ProxyResult.error("pac-url-not-found", "no PAC/WPAD URL was discovered"));
@@ -127,20 +142,26 @@ public final class PacUrlProxyResolver {
         diagnostics.pacUrl(pacUrl, resolution.getSource());
         diagnostics.step("PAC URL: " + pacUrl + " (source: " + resolution.getSource() + ")");
 
-        String pacScript;
+        PacScript pacScript;
         try {
-            pacScript = pacScriptLoader.load(pacUrl);
+            PacScript before = previous != null && pacUrl.equals(previous.resolution.getPacUrl())
+                    ? previous.script : null;
+            pacScript = pacScriptLoader instanceof ConditionalPacScriptLoader
+                    ? ((ConditionalPacScriptLoader) pacScriptLoader).load(pacUrl, before)
+                    : PacScript.of(pacScriptLoader.load(pacUrl));
         } catch (ProxyResolutionException e) {
             String detail = describe(e);
             diagnostics.step("PAC script NOT reachable: " + detail);
             return diagnostics.finish(ProxyResult.error("pac-download-failed", detail));
         }
-        int length = pacScript == null ? 0 : pacScript.length();
+        int length = pacScript.getContent().length();
         diagnostics.pacScriptLength(length);
-        diagnostics.step("PAC script downloaded (" + length + " characters).");
+        diagnostics.step(pacScript.isNotModified()
+                ? "PAC script unchanged (HTTP 304, " + length + " characters)."
+                : "PAC script downloaded (" + length + " characters).");
 
         try {
-            ProxyResult result = pacEvaluator.evaluate(pacScript, targetUrl);
+            ProxyResult result = pacEvaluator.evaluate(pacScript.getContent(), targetUrl);
             diagnostics.step("FindProxyForURL -> " + result);
             if (cache != null) {
                 cache.store(generation, resolution, pacScript);
@@ -155,11 +176,12 @@ public final class PacUrlProxyResolver {
 
     private ProxyDiagnostics evaluate(ProxyDiagnostics.Builder diagnostics, PacCache.Entry entry, String targetUrl,
                                       String which) {
+        String content = entry.script.getContent();
         diagnostics.pacUrl(entry.resolution.getPacUrl(), entry.resolution.getSource());
-        diagnostics.pacScriptLength(entry.script == null ? 0 : entry.script.length());
+        diagnostics.pacScriptLength(content.length());
         diagnostics.step("PAC script (" + which + ") from " + entry.resolution.getPacUrl());
         try {
-            ProxyResult result = pacEvaluator.evaluate(entry.script, targetUrl);
+            ProxyResult result = pacEvaluator.evaluate(content, targetUrl);
             diagnostics.step("FindProxyForURL -> " + result);
             return diagnostics.finish(result);
         } catch (ProxyResolutionException e) {

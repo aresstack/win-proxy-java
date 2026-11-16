@@ -197,12 +197,18 @@ result; failures surface as an `ERROR` `ProxyResult` with a technical reason.
 
 ### PAC caching (since 0.3.0)
 
-In the `PAC_URL_*` modes a `WindowsProxyResolver` discovers the PAC URL and downloads the PAC
-script **once**; every later `resolve()` evaluates the remembered script. Keep one resolver per
-configuration instead of creating one per request. Call `invalidatePacCache()` after a network
-change or when the PAC file changed: the next `resolve()` loads both again, and if that fails
-the last good PAC URL and script stay in use. `diagnose(url)` always discovers and downloads
-afresh.
+In the `PAC_URL_*` modes a `WindowsProxyResolver` remembers the PAC URL and the PAC script and
+reloads them lazily during a later `resolve()`, never on a timer:
+
+- after the lifetime the PAC server announces (`Cache-Control: max-age`, `no-cache`, `Expires`),
+  clamped to 5 min … 24 h, otherwise after 12 h; the reload revalidates with
+  `If-None-Match`/`If-Modified-Since` (HTTP 304 = keep the script);
+- at once after `invalidatePacCache()` (network change, failed connection over a resolved proxy).
+
+If a reload fails, the last good script stays in use and the next attempt waits 1 min, doubling
+up to 1 h; `pacCacheStatus()` reports since when refreshing fails. Keep one resolver per
+configuration instead of creating one per request. `diagnose(url)` always discovers and
+downloads afresh.
 
 ### Mode status in 0.2.0
 

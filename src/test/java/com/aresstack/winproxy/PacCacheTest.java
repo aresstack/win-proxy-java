@@ -4,8 +4,10 @@ import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -208,9 +210,125 @@ class PacCacheTest {
         long before = cache.generation();
         cache.invalidate();
 
-        cache.store(before, PacUrlResolution.found(PAC_URL, "test"), SCRIPT);
+        cache.store(before, PacUrlResolution.found(PAC_URL, "test"), PacScript.of(SCRIPT));
 
-        assertEquals(null, cache.current());
         assertEquals(null, cache.lastGood());
+        assertTrue(cache.needsReload());
+    }
+
+    // ── lifetime, revalidation, retry delay, status ──
+
+    private final AtomicLong now = new AtomicLong(1_000_000L);
+
+    private PacUrlProxyResolver timed(PacCache cache, PacScriptLoader scripts) {
+        return new PacUrlProxyResolver(() -> PacUrlResolution.found(PAC_URL, "test"), scripts, evaluator, cache, false);
+    }
+
+    @Test
+    void withoutCacheHeadersTheScriptIsReloadedAfterTwelveHours() {
+        PacCache cache = new PacCache(now::get);
+        PacUrlProxyResolver pipeline = timed(cache, loader);
+        pipeline.resolve("https://confluence.example.com/");
+
+        now.addAndGet(PacCache.DEFAULT_MAX_AGE_MILLIS - 1);
+        pipeline.resolve("https://confluence.example.com/");
+        assertEquals(1, downloads.get());
+
+        now.addAndGet(1);
+        pipeline.resolve("https://confluence.example.com/");
+        assertEquals(2, downloads.get());
+    }
+
+    @Test
+    void announcedLifetimeIsHonouredWithinBounds() {
+        assertEquals(PacCache.MIN_MAX_AGE_MILLIS, PacCache.lifetime(0L), "no-cache must not mean: every request");
+        assertEquals(30L * 60 * 1000, PacCache.lifetime(30L * 60 * 1000));
+        assertEquals(PacCache.MAX_MAX_AGE_MILLIS, PacCache.lifetime(7L * 24 * 60 * 60 * 1000));
+        assertEquals(PacCache.DEFAULT_MAX_AGE_MILLIS, PacCache.lifetime(PacScript.NO_MAX_AGE));
+    }
+
+    @Test
+    void cacheHeadersAreParsed() {
+        assertEquals(3_600_000L, UrlConnectionPacScriptLoader.maxAgeMillis("public, max-age=3600", -1L, -1L, 0L));
+        assertEquals(0L, UrlConnectionPacScriptLoader.maxAgeMillis("no-cache", -1L, -1L, 0L));
+        assertEquals(0L, UrlConnectionPacScriptLoader.maxAgeMillis("no-store, max-age=60", -1L, -1L, 0L));
+        assertEquals(600_000L, UrlConnectionPacScriptLoader.maxAgeMillis(null, 1_600_000L, 1_000_000L, 0L));
+        assertEquals(PacScript.NO_MAX_AGE, UrlConnectionPacScriptLoader.maxAgeMillis(null, -1L, -1L, 0L));
+    }
+
+    @Test
+    void reloadRevalidatesWithTheEtagAndKeepsTheScriptOn304() {
+        PacCache cache = new PacCache(now::get);
+        java.util.List<String> sentEtags = new java.util.ArrayList<String>();
+        ConditionalPacScriptLoader conditional = new ConditionalPacScriptLoader() {
+            @Override
+            public PacScript load(String pacUrl, PacScript previous) {
+                downloads.incrementAndGet();
+                sentEtags.add(previous == null ? null : previous.getEtag());
+                return previous == null
+                        ? new PacScript(SCRIPT, 60L * 60 * 1000, "\"v1\"", null, false)
+                        : new PacScript(previous.getContent(), 60L * 60 * 1000, previous.getEtag(), null, true);
+            }
+
+            @Override
+            public String load(String pacUrl) {
+                return load(pacUrl, null).getContent();
+            }
+        };
+        PacUrlProxyResolver pipeline = timed(cache, conditional);
+        pipeline.resolve("https://confluence.example.com/");
+
+        now.addAndGet(60L * 60 * 1000);
+        ProxyDiagnostics revalidated = pipeline.diagnose(null, "https://confluence.example.com/");
+
+        assertTrue(revalidated.getResult().isProxy());
+        assertTrue(revalidated.getSteps().toString().contains("HTTP 304"), revalidated.getSteps().toString());
+        assertEquals(java.util.Arrays.asList(null, "\"v1\""), sentEtags);
+        assertEquals(now.get() + 60L * 60 * 1000, cache.status().getValidUntil());
+    }
+
+    @Test
+    void failedRefreshKeepsTheScriptRetriesWithGrowingDelayAndShowsItInTheStatus() {
+        PacCache cache = new PacCache(now::get);
+        PacUrlProxyResolver pipeline = timed(cache, loader);
+        pipeline.resolve("https://confluence.example.com/");
+        long loadedAt = now.get();
+
+        wpadDown.set(true);
+        now.addAndGet(PacCache.DEFAULT_MAX_AGE_MILLIS);
+        long failedAt = now.get();
+        assertTrue(pipeline.resolve("https://confluence.example.com/").isProxy());
+        assertEquals(2, downloads.get());
+
+        now.addAndGet(PacCache.FIRST_RETRY_MILLIS - 1);
+        assertTrue(pipeline.resolve("https://confluence.example.com/").isProxy());
+        assertEquals(2, downloads.get(), "no retry before the delay");
+        now.addAndGet(1);
+        assertTrue(pipeline.resolve("https://confluence.example.com/").isProxy());
+        assertEquals(3, downloads.get());
+        now.addAndGet(PacCache.FIRST_RETRY_MILLIS);
+        pipeline.resolve("https://confluence.example.com/");
+        assertEquals(3, downloads.get(), "second delay is twice as long");
+
+        PacCacheStatus status = cache.status();
+        assertTrue(status.isStale());
+        assertEquals(loadedAt, status.getLoadedAt());
+        assertEquals(failedAt, status.getRefreshFailingSince());
+        assertEquals(2, status.getConsecutiveFailures());
+        assertTrue(status.describe().contains("Connect timed out"), status.describe());
+
+        wpadDown.set(false);
+        now.addAndGet(PacCache.FIRST_RETRY_MILLIS);
+        pipeline.resolve("https://confluence.example.com/");
+        assertEquals(4, downloads.get());
+        assertFalse(cache.status().isStale());
+    }
+
+    @Test
+    void retryDelayDoublesUpToOneHour() {
+        assertEquals(60_000L, PacCache.retryDelay(1));
+        assertEquals(120_000L, PacCache.retryDelay(2));
+        assertEquals(240_000L, PacCache.retryDelay(3));
+        assertEquals(PacCache.MAX_RETRY_MILLIS, PacCache.retryDelay(20));
     }
 }

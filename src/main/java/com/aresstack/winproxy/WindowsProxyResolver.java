@@ -13,10 +13,12 @@ package com.aresstack.winproxy;
  * {@link #diagnose(String)} runs exactly the same resolution and additionally
  * records every step for a settings UI or a log.
  * <p>
- * In the {@code PAC_URL_*} modes the PAC URL discovery and the PAC download run once per
- * instance; every later {@link #resolve(String)} evaluates the remembered script. Keep one
- * instance per configuration. {@link #invalidatePacCache()} makes the next resolution load
- * both again; if that fails, the last good PAC URL and script stay in use.
+ * In the {@code PAC_URL_*} modes the PAC URL and the PAC script are remembered per instance
+ * and reloaded lazily: after the lifetime announced by the PAC server ({@code Cache-Control:
+ * max-age}, {@code Expires}; 5 min to 24 h), otherwise after 12 h, and at once after
+ * {@link #invalidatePacCache()}. A failed reload keeps the last good script and retries with a
+ * growing delay (1 min up to 1 h); {@link #pacCacheStatus()} shows since when it fails. Nothing
+ * runs on a timer. Keep one instance per configuration.
  *
  * @see ProxyMode
  */
@@ -160,7 +162,7 @@ public final class WindowsProxyResolver {
 
     /**
      * Marks the remembered PAC URL and PAC script as outdated, e.g. after a network change or
-     * when the PAC file is known to have changed. The next {@link #resolve(String)} discovers
+     * when a connection over a resolved proxy failed. The next {@link #resolve(String)} discovers
      * and downloads them again; if that fails, the last good ones stay in use. Without
      * {@code PAC_URL_*} mode this does nothing.
      *
@@ -168,6 +170,18 @@ public final class WindowsProxyResolver {
      */
     public void invalidatePacCache() {
         pacCache.invalidate();
+    }
+
+    /**
+     * State of the remembered PAC script: when it was loaded, until when it is valid, and since
+     * when refreshing it fails (the last good script is then still in use). For a status line
+     * or a log; without {@code PAC_URL_*} mode nothing is remembered.
+     *
+     * @return the state, never {@code null}
+     * @since 0.3.0
+     */
+    public PacCacheStatus pacCacheStatus() {
+        return pacCache.status();
     }
 
     /** PAC pipeline over the remembered PAC URL and script (loaded only when needed). */
