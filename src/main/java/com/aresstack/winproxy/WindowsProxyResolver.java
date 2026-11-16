@@ -12,6 +12,13 @@ package com.aresstack.winproxy;
  * <p>
  * {@link #diagnose(String)} runs exactly the same resolution and additionally
  * records every step for a settings UI or a log.
+ * <p>
+ * In the {@code PAC_URL_*} modes the PAC URL and the PAC script are remembered per instance
+ * and reloaded lazily: after the lifetime announced by the PAC server ({@code Cache-Control:
+ * max-age}, {@code Expires}; 5 min to 24 h), otherwise after 12 h, and at once after
+ * {@link #invalidatePacCache()}. A failed reload keeps the last good script and retries with a
+ * growing delay (1 min up to 1 h); {@link #pacCacheStatus()} shows since when it fails. Nothing
+ * runs on a timer. Keep one instance per configuration.
  *
  * @see ProxyMode
  */
@@ -26,6 +33,7 @@ public final class WindowsProxyResolver {
     private final StaticProxySettingsResolver staticProxySettingsResolver;
     private final ManualProxyResolver manualProxyResolver;
     private final DirectProxyResolver directProxyResolver;
+    private final PacCache pacCache = new PacCache();
 
     /**
      * Create a resolver with the default configuration.
@@ -88,7 +96,7 @@ public final class WindowsProxyResolver {
             case PAC_URL_POWERSHELL:
             case PAC_URL_WINDOWS_SETTINGS:
             case PAC_URL_WSCRIPT:
-                return pacPipeline(pacUrlResolverFor(mode)).resolve(effectiveTargetUrl(targetUrl));
+                return cachedPacPipeline(pacUrlResolverFor(mode)).resolve(effectiveTargetUrl(targetUrl));
 
             case POWERSHELL_ROUTE_RESOLVER_LEGACY:
                 return resolveLegacyPowerShellRoute(targetUrl);
@@ -111,6 +119,10 @@ public final class WindowsProxyResolver {
      * step (PAC URL and its source, PAC script size, evaluation result, failure messages).
      * Intended for "resolve test" buttons and logs; {@link ProxyDiagnostics#getResult()} is
      * what {@link #resolve(String)} returns.
+     * <p>
+     * In the {@code PAC_URL_*} modes the PAC URL is discovered and the PAC script downloaded
+     * afresh, so the report shows whether they are reachable right now; on success both
+     * replace the remembered ones used by {@link #resolve(String)}.
      *
      * @param targetUrl target URL
      * @return the diagnostics, never {@code null}
@@ -121,7 +133,7 @@ public final class WindowsProxyResolver {
         String url = effectiveTargetUrl(targetUrl);
         PacUrlResolver pacUrlResolver = pacUrlResolverFor(mode);
         if (pacUrlResolver != null) {
-            return pacPipeline(pacUrlResolver).diagnose(mode, url);
+            return freshPacPipeline(pacUrlResolver).diagnose(mode, url);
         }
         ProxyDiagnostics.Builder diagnostics = ProxyDiagnostics.builder(mode, url);
         ProxyResult result = resolve(url);
@@ -148,8 +160,38 @@ public final class WindowsProxyResolver {
         }
     }
 
-    private PacUrlProxyResolver pacPipeline(PacUrlResolver pacUrlResolver) {
-        return new PacUrlProxyResolver(pacUrlResolver, pacScriptLoader, pacEvaluator);
+    /**
+     * Marks the remembered PAC URL and PAC script as outdated, e.g. after a network change or
+     * when a connection over a resolved proxy failed. The next {@link #resolve(String)} discovers
+     * and downloads them again; if that fails, the last good ones stay in use. Without
+     * {@code PAC_URL_*} mode this does nothing.
+     *
+     * @since 0.3.0
+     */
+    public void invalidatePacCache() {
+        pacCache.invalidate();
+    }
+
+    /**
+     * State of the remembered PAC script: when it was loaded, until when it is valid, and since
+     * when refreshing it fails (the last good script is then still in use). For a status line
+     * or a log; without {@code PAC_URL_*} mode nothing is remembered.
+     *
+     * @return the state, never {@code null}
+     * @since 0.3.0
+     */
+    public PacCacheStatus pacCacheStatus() {
+        return pacCache.status();
+    }
+
+    /** PAC pipeline over the remembered PAC URL and script (loaded only when needed). */
+    private PacUrlProxyResolver cachedPacPipeline(PacUrlResolver pacUrlResolver) {
+        return new PacUrlProxyResolver(pacUrlResolver, pacScriptLoader, pacEvaluator, pacCache, false);
+    }
+
+    /** PAC pipeline that discovers and downloads now and remembers a successful result. */
+    private PacUrlProxyResolver freshPacPipeline(PacUrlResolver pacUrlResolver) {
+        return new PacUrlProxyResolver(pacUrlResolver, pacScriptLoader, pacEvaluator, pacCache, true);
     }
 
     /**

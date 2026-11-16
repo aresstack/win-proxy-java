@@ -22,14 +22,14 @@ by `cscript.exe` for workstations where PowerShell is blocked.
 <dependency>
   <groupId>com.aresstack</groupId>
   <artifactId>win-proxy-java</artifactId>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
 </dependency>
 ```
 
 Gradle:
 
 ```groovy
-implementation 'com.aresstack:win-proxy-java:0.2.0'
+implementation 'com.aresstack:win-proxy-java:0.3.0'
 ```
 
 ## Why this library exists
@@ -194,6 +194,21 @@ result; failures surface as an `ERROR` `ProxyResult` with a technical reason.
 | `POWERSHELL_ROUTE_RESOLVER_LEGACY` | **Deprecated.** Legacy `GetSystemWebProxy()` PowerShell/.NET route resolution (no GraalVM). Not for normal use. |
 | `WINDOWS_NATIVE_PROXY_SETTINGS` | **Not implemented** (reserved for a future native implementation). `resolve()` returns `NOT_IMPLEMENTED` with a detail text, never DIRECT; `ProxyConfiguration.validate()` rejects the mode. |
 | `WINDOWS_NATIVE_ROUTE_RESOLVER` | **Not implemented** (reserved for a future native implementation). `resolve()` returns `NOT_IMPLEMENTED` with a detail text, never DIRECT; `ProxyConfiguration.validate()` rejects the mode. |
+
+### PAC caching (since 0.3.0)
+
+In the `PAC_URL_*` modes a `WindowsProxyResolver` remembers the PAC URL and the PAC script and
+reloads them lazily during a later `resolve()`, never on a timer:
+
+- after the lifetime the PAC server announces (`Cache-Control: max-age`, `no-cache`, `Expires`),
+  clamped to 5 min … 24 h, otherwise after 12 h; the reload revalidates with
+  `If-None-Match`/`If-Modified-Since` (HTTP 304 = keep the script);
+- at once after `invalidatePacCache()` (network change, failed connection over a resolved proxy).
+
+If a reload fails, the last good script stays in use and the next attempt waits 1 min, doubling
+up to 1 h; `pacCacheStatus()` reports since when refreshing fails. Keep one resolver per
+configuration instead of creating one per request. `diagnose(url)` always discovers and
+downloads afresh.
 
 ### Mode status in 0.2.0
 
@@ -488,7 +503,7 @@ and confirm it no longer returns `pac-evaluation-failed`.
 - Registry-based PAC URL discovery is Windows-specific.
 - Maven Central versions are immutable. Publish fixes with a new version.
 - Consumers should depend on a published coordinate (e.g.
-  `com.aresstack:win-proxy-java:0.2.0`). `mavenLocal()` is only acceptable as a
+  `com.aresstack:win-proxy-java:0.3.0`). `mavenLocal()` is only acceptable as a
   temporary local-test path and must be removed before a downstream merge/release. If a
   required version is not yet published remotely, treat publishing it as an explicit release
   step (TODO) rather than relying on `mavenLocal()`.
