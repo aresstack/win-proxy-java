@@ -12,6 +12,11 @@ package com.aresstack.winproxy;
  * <p>
  * {@link #diagnose(String)} runs exactly the same resolution and additionally
  * records every step for a settings UI or a log.
+ * <p>
+ * In the {@code PAC_URL_*} modes the PAC URL discovery and the PAC download run once per
+ * instance; every later {@link #resolve(String)} evaluates the remembered script. Keep one
+ * instance per configuration. {@link #invalidatePacCache()} makes the next resolution load
+ * both again; if that fails, the last good PAC URL and script stay in use.
  *
  * @see ProxyMode
  */
@@ -26,6 +31,7 @@ public final class WindowsProxyResolver {
     private final StaticProxySettingsResolver staticProxySettingsResolver;
     private final ManualProxyResolver manualProxyResolver;
     private final DirectProxyResolver directProxyResolver;
+    private final PacCache pacCache = new PacCache();
 
     /**
      * Create a resolver with the default configuration.
@@ -88,7 +94,7 @@ public final class WindowsProxyResolver {
             case PAC_URL_POWERSHELL:
             case PAC_URL_WINDOWS_SETTINGS:
             case PAC_URL_WSCRIPT:
-                return pacPipeline(pacUrlResolverFor(mode)).resolve(effectiveTargetUrl(targetUrl));
+                return cachedPacPipeline(pacUrlResolverFor(mode)).resolve(effectiveTargetUrl(targetUrl));
 
             case POWERSHELL_ROUTE_RESOLVER_LEGACY:
                 return resolveLegacyPowerShellRoute(targetUrl);
@@ -111,6 +117,10 @@ public final class WindowsProxyResolver {
      * step (PAC URL and its source, PAC script size, evaluation result, failure messages).
      * Intended for "resolve test" buttons and logs; {@link ProxyDiagnostics#getResult()} is
      * what {@link #resolve(String)} returns.
+     * <p>
+     * In the {@code PAC_URL_*} modes the PAC URL is discovered and the PAC script downloaded
+     * afresh, so the report shows whether they are reachable right now; on success both
+     * replace the remembered ones used by {@link #resolve(String)}.
      *
      * @param targetUrl target URL
      * @return the diagnostics, never {@code null}
@@ -121,7 +131,7 @@ public final class WindowsProxyResolver {
         String url = effectiveTargetUrl(targetUrl);
         PacUrlResolver pacUrlResolver = pacUrlResolverFor(mode);
         if (pacUrlResolver != null) {
-            return pacPipeline(pacUrlResolver).diagnose(mode, url);
+            return freshPacPipeline(pacUrlResolver).diagnose(mode, url);
         }
         ProxyDiagnostics.Builder diagnostics = ProxyDiagnostics.builder(mode, url);
         ProxyResult result = resolve(url);
@@ -148,8 +158,32 @@ public final class WindowsProxyResolver {
         }
     }
 
-    private PacUrlProxyResolver pacPipeline(PacUrlResolver pacUrlResolver) {
-        return new PacUrlProxyResolver(pacUrlResolver, pacScriptLoader, pacEvaluator);
+    /**
+     * Marks the remembered PAC URL and PAC script as outdated, e.g. after a network change or
+     * when the PAC file is known to have changed. The next {@link #resolve(String)} discovers
+     * and downloads them again; if that fails, the last good ones stay in use. Without
+     * {@code PAC_URL_*} mode this does nothing.
+     *
+     * @since 0.3.0
+     */
+    public void invalidatePacCache() {
+        pacCache.invalidate();
+    }
+
+    /** PAC pipeline over the remembered PAC URL and script (loaded only when needed). */
+    private PacUrlProxyResolver cachedPacPipeline(final PacUrlResolver pacUrlResolver) {
+        return new PacUrlProxyResolver(
+                () -> pacCache.resolve(pacUrlResolver),
+                pacUrl -> pacCache.load(pacScriptLoader, pacUrl),
+                pacEvaluator);
+    }
+
+    /** PAC pipeline that discovers and downloads now and remembers what it got. */
+    private PacUrlProxyResolver freshPacPipeline(final PacUrlResolver pacUrlResolver) {
+        return new PacUrlProxyResolver(
+                () -> pacCache.resolveFresh(pacUrlResolver),
+                pacUrl -> pacCache.loadFresh(pacScriptLoader, pacUrl),
+                pacEvaluator);
     }
 
     /**

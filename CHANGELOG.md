@@ -3,6 +3,27 @@
 All notable changes to `win-proxy-java` are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); the artifact targets Java 8.
 
+## 0.3.0
+
+### Fixed
+
+- **The PAC script is no longer downloaded on every `resolve()`.** In the `PAC_URL_*` modes
+  `WindowsProxyResolver` ran the PAC URL discovery (PowerShell/WScript process or registry
+  read) and downloaded the PAC file for each call. Callers resolving many URLs hit the WPAD
+  server constantly; once it throttled or timed out, routes that had worked failed with
+  `pac-download-failed`. Each resolver instance now discovers the PAC URL and downloads the
+  script once and evaluates the remembered script afterwards. Concurrent first resolutions
+  wait for that single load.
+
+### Added
+
+- **`WindowsProxyResolver.invalidatePacCache()`** — marks the remembered PAC URL and script as
+  outdated (e.g. after a network change); the next `resolve()` loads them again. If that reload
+  fails, the last good PAC URL and script stay in use, so a briefly unreachable WPAD server no
+  longer breaks working routes. A discovery that finds no PAC URL at all forgets them.
+- `diagnose(url)` still discovers and downloads afresh, so a "resolve test" shows whether the
+  WPAD server is reachable right now; a successful diagnosis refreshes the remembered values.
+
 ## 0.2.0 — first non-beta release
 
 ### Added

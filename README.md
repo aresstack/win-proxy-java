@@ -22,14 +22,14 @@ by `cscript.exe` for workstations where PowerShell is blocked.
 <dependency>
   <groupId>com.aresstack</groupId>
   <artifactId>win-proxy-java</artifactId>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
 </dependency>
 ```
 
 Gradle:
 
 ```groovy
-implementation 'com.aresstack:win-proxy-java:0.2.0'
+implementation 'com.aresstack:win-proxy-java:0.3.0'
 ```
 
 ## Why this library exists
@@ -194,6 +194,15 @@ result; failures surface as an `ERROR` `ProxyResult` with a technical reason.
 | `POWERSHELL_ROUTE_RESOLVER_LEGACY` | **Deprecated.** Legacy `GetSystemWebProxy()` PowerShell/.NET route resolution (no GraalVM). Not for normal use. |
 | `WINDOWS_NATIVE_PROXY_SETTINGS` | **Not implemented** (reserved for a future native implementation). `resolve()` returns `NOT_IMPLEMENTED` with a detail text, never DIRECT; `ProxyConfiguration.validate()` rejects the mode. |
 | `WINDOWS_NATIVE_ROUTE_RESOLVER` | **Not implemented** (reserved for a future native implementation). `resolve()` returns `NOT_IMPLEMENTED` with a detail text, never DIRECT; `ProxyConfiguration.validate()` rejects the mode. |
+
+### PAC caching (since 0.3.0)
+
+In the `PAC_URL_*` modes a `WindowsProxyResolver` discovers the PAC URL and downloads the PAC
+script **once**; every later `resolve()` evaluates the remembered script. Keep one resolver per
+configuration instead of creating one per request. Call `invalidatePacCache()` after a network
+change or when the PAC file changed: the next `resolve()` loads both again, and if that fails
+the last good PAC URL and script stay in use. `diagnose(url)` always discovers and downloads
+afresh.
 
 ### Mode status in 0.2.0
 
@@ -488,7 +497,7 @@ and confirm it no longer returns `pac-evaluation-failed`.
 - Registry-based PAC URL discovery is Windows-specific.
 - Maven Central versions are immutable. Publish fixes with a new version.
 - Consumers should depend on a published coordinate (e.g.
-  `com.aresstack:win-proxy-java:0.2.0`). `mavenLocal()` is only acceptable as a
+  `com.aresstack:win-proxy-java:0.3.0`). `mavenLocal()` is only acceptable as a
   temporary local-test path and must be removed before a downstream merge/release. If a
   required version is not yet published remotely, treat publishing it as an explicit release
   step (TODO) rather than relying on `mavenLocal()`.
